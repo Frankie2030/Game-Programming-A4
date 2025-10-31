@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  gomoku-server:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DEBUG=0
+      - MAX_GAMES=100
+      - AI_THINKING_TIME=2
+    volumes:
+      - ./src:/app/src
+      - ./backend:/app/backend
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+volumes:
+  redis_data:
