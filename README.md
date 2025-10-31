@@ -45,5 +45,10 @@ Next steps
 If you'd like the strict mapping to `Assignment4_Board_Game_Specs.pdf`, paste the PDF text or confirm key requirements (board size, AI, multiplayer, platform) and I'll adapt the stack and skeleton accordingly.
 
 Enjoy — tell me which engine you want scaffolded and I'll continue.
-# GOMOKU
-
+# Members - Group 6
+| **Student name** | **Student ID** |
+|-----|--------|
+| Nguyễn Ngọc Khôi | 2252378 |
+| Nguyễn Quang Phú | 2252621 |
+| Nguyễn Tấn Bảo Lễ | 2252428 |
+| Nguyễn Minh Khôi | 2252377 |
