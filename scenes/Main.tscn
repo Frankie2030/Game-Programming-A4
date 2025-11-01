@@ -1,7 +1,10 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/GameManager.gd" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/Board.tscn" id="2"]
 
 [node name="Main" type="Node"]
-script = ExtResource("res://scripts/GameManager.gd")
+script = ExtResource("1")
 
 [node name="World" type="Node3D" parent="."]
 
@@ -13,7 +16,7 @@ fov = 60.0
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="World"]
 transform = Transform3D(0.91, -0.2, 0.36, 0.0, 0.87, 0.49, -0.42, -0.44, 0.79, 0, 20, 0)
 
-[node name="Board" parent="World" instance=ExtResource("res://scenes/Board.tscn")]
+[node name="Board" parent="World" instance=ExtResource("2")]
 
 [node name="UI" type="CanvasLayer" parent="."]
 
