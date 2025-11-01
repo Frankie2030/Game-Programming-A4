@@ -1,0 +1,7 @@
+[gd_scene load_steps=3 format=3]
+
+[node name="Board" type="Node3D"]
+script = ExtResource("res://scripts/Board.gd")
+
+[node name="StonePool" type="MultiMeshInstance3D" parent="."]
+script = ExtResource("res://scripts/StonePool.gd")

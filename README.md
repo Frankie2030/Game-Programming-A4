@@ -1,49 +1,22 @@
-# GOMOKU
+# -----------------------------
+# Input Map (Project → Project Settings → Input Map)
+#   ui_up, ui_down, ui_left, ui_right, ui_accept (Enter/Space)
+#   ui_page_up, ui_page_down (bind to Q / E or PageUp / PageDown)
 
-This folder contains the Assignment 4 starter for turning the Gomoku board game into a 3D-engine project.
-
-Overview
-- A small, engine-agnostic Python implementation of the Gomoku rules lives in `src/gomoku.py`.
-- Unit tests are in `tests/test_gomoku.py` and use pytest. These help validate the rule engine before porting to a 3D engine.
-
-Recommended tech stack
-
-Primary: Godot 4 (GDScript)
-- Lightweight, open-source, and fast to iterate. Use Godot scenes for the board and pieces. Port `src/gomoku.py` logic to a `Board.gd` script.
-
-Alternative: Unity (C#)
-- Use Unity if you prefer C# and the Unity Editor; port the Python logic into a `Gomoku.cs` game manager.
-
-Web option: Three.js / Babylon.js + Node backend
-- If you want browser demos, render the 3D board with Three.js and host multiplayer with a Node-based WebSocket server.
-
-Files added
-- `src/gomoku.py` — pure-Python Gomoku board & win detection (5-in-a-row)
-- `tests/test_gomoku.py` — pytest unit tests covering win directions and edge cases
-
-How to run tests
-
-Create and activate a venv, then install pytest:
-
-```bash
-# macOS / zsh
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install pytest
-```
-
-Run tests from repo root:
-
-```bash
-pytest A4/tests -q
-```
-
-Next steps
-- Pick an engine (Godot/Unity/Web). I can create a minimal Godot project skeleton and port the rule logic into GDScript next, or create a Unity C# skeleton if you prefer.
-
-If you'd like the strict mapping to `Assignment4_Board_Game_Specs.pdf`, paste the PDF text or confirm key requirements (board size, AI, multiplayer, platform) and I'll adapt the stack and skeleton accordingly.
-
-Enjoy — tell me which engine you want scaffolded and I'll continue.
-# GOMOKU
-
+# -----------------------------
+# Quick Start
+# 1) Create a new Godot 4 project and add the files.
+# 2) Open Main.tscn and run it (local hotseat by default). Use arrow keys to move, Q/E (or PageUp/Down) to change layer, Space/Enter to place.
+# 3) Single-player vs AI: from the console or an in‑game toggle you add later, call:
+#      get_tree().current_scene.set_mode_single_ai()
+# 4) Server: run scenes/ServerLauncher.tscn headless:
+#      godot4 --headless --path . --scene res://scenes/ServerLauncher.tscn
+# 5) Client: run Main.tscn, then connect:
+#      get_tree().current_scene.set_mode_client("<server_ip>", 7777)
+#    Your local scene becomes a network client; the server is authoritative.
+#
+# Notes
+# - The server holds the true grid and validates moves, broadcasting updates.
+# - The client only sends intents (x,y,z). The server assigns colors on join.
+# - The AI is simple but fast; raise max_depth/beam_width for stronger play.
+# - Board rendering uses simple grid lines + spheres via MultiMesh for speed.
