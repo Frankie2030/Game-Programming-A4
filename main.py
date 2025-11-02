@@ -31,7 +31,7 @@ from gomoku_game import GomokuGame, Player
 from ai_player import AIPlayer
 
 
-def run_server(host="localhost", port=12345):
+def run_server(host="0.0.0.0", port=12345):
     """Run a dedicated game server"""
     print(f"Starting Dedicated Gomoku Server on {host}:{port}")
     
