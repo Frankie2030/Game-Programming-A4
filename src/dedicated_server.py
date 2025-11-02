@@ -75,7 +75,7 @@ class DedicatedGomokuServer:
     Uses non-blocking sockets and proper message queuing.
     """
     
-    def __init__(self, host: str = "localhost", port: int = 12345):
+    def __init__(self, host: str = "0.0.0.0", port: int = 12345):
         self.host = host
         self.port = port
         self.server_socket = None

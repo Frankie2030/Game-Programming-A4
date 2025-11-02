@@ -12,7 +12,7 @@ from enum import Enum
 
 class ServerType(Enum):
     """Server deployment types"""
-    LOCALHOST = "localhost"
+    LOCALHOST = "0.0.0.0"
     AWS_LAMBDA = "aws_lambda"
     AZURE_FUNCTIONS = "azure_functions"
     CUSTOM = "custom"
