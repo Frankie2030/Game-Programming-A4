@@ -117,9 +117,9 @@ class GomokuUI:
         # Smaller screen settings for side-by-side viewing
         self.WINDOW_WIDTH = 800   # Reduced from 1000
         self.WINDOW_HEIGHT = 600  # Reduced from 700
-        self.BOARD_SIZE = 380  # Further reduced to fit better in 800x600
-        self.BOARD_OFFSET_X = 40
-        self.BOARD_OFFSET_Y = 60   # Moved up more to ensure full visibility
+        self.BOARD_SIZE = 450  # Further reduced to fit better in 800x600
+        self.BOARD_OFFSET_X = 60
+        self.BOARD_OFFSET_Y = 100   # Moved up more to ensure full visibility
         self.CELL_SIZE = self.BOARD_SIZE // GomokuGame.BOARD_SIZE
         
         # Center the window on screen
@@ -143,6 +143,16 @@ class GomokuUI:
         self.ai_difficulty = "medium"
         self.network_manager = None
         self.is_network_game = False
+        # === Turn Timer ===
+        self.turn_start_time = None
+        self.move_time_limit = 20  # seconds
+        self.elapsed_before_pause = 0  # how much time elapsed before pausing
+
+        # Pause control per player
+        self.paused = False
+        self.pause_start_time = None
+        self.pause_allowance = {Player.BLACK: 2, Player.WHITE: 2}
+        self.pause_remaining = {Player.BLACK: 30, Player.WHITE: 30}
         
         # AI threading
         self.ai_thinking = False
@@ -258,8 +268,8 @@ class GomokuUI:
         
         # Gameplay buttons (better positioned for 800px width)
         self.buttons["gameplay"] = [
-            Button(480, 50, 80, 35, "Pause", self.font_small),
-            Button(580, 50, 80, 35, "Resign", self.font_small)
+            Button(540, 500, 100, 40, "Pause", self.font_small),
+            Button(660, 500, 100, 40, "Resign", self.font_small)
         ]
         
         # Pause menu buttons (centered for 800px width)
@@ -399,9 +409,22 @@ class GomokuUI:
         for i, button in enumerate(buttons):
             if button.handle_event(event):
                 if i == 0:  # Pause
-                    self.ui_state = UIState.PAUSE_MENU
-                elif i == 1:  # Resign
-                    self._resign_game()
+                    if not self.paused and self.pause_allowance[self.game.current_player] > 0:
+                        self.paused = True
+                        self.ui_state = UIState.PAUSE_MENU
+                        self.pause_start_time = time.time()
+                        self.pause_allowance[self.game.current_player] -= 1
+
+                        # Freeze elapsed time so far
+                        if self.turn_start_time:
+                            self.elapsed_before_pause += time.time() - self.turn_start_time
+                            self.turn_start_time = None  # stop timing
+
+                        print(f"{self.game.current_player.name} paused the game "
+                            f"({self.pause_allowance[self.game.current_player]} pauses left)")
+                    else:
+                        print("No pauses left or already paused")
+
         
         # Handle board clicks
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -417,7 +440,22 @@ class GomokuUI:
         for i, button in enumerate(buttons):
             if button.handle_event(event):
                 if i == 0:  # Resume
+                    current_player = self.game.current_player
+                    if self.paused and self.pause_start_time:
+                        elapsed_pause = time.time() - self.pause_start_time
+                        self.pause_remaining[current_player] = max(
+                            0, self.pause_remaining[current_player] - int(elapsed_pause)
+                        )
+                        self.paused = False
+                        self.pause_start_time = None
+
+                        # Resume clock from where it stopped
+                        self.turn_start_time = time.time()
+                        print(f"{current_player.name} resumed — "
+                            f"{self.pause_remaining[current_player]} s pause time left")
+
                     self.ui_state = UIState.GAMEPLAY
+
                 elif i == 1:  # Save Game
                     self._save_game()
                 elif i == 2:  # Main Menu
@@ -612,7 +650,28 @@ class GomokuUI:
                 time.sleep(0.001)  # Small delay to prevent blocking
             except:
                 pass
-        
+        import time
+
+        # Enforce per-move 20s limit
+        if self.ui_state == UIState.GAMEPLAY and self.game.game_state == GameState.PLAYING:
+            if self.turn_start_time is None:
+                self.turn_start_time = time.time()
+                
+            # Skip countdown while paused
+            if self.paused:
+                return
+
+            if self.turn_start_time:
+                elapsed = self.elapsed_before_pause + (time.time() - self.turn_start_time)
+            else:
+                elapsed = self.elapsed_before_pause  # frozen time during pause
+
+            if elapsed > self.move_time_limit:
+                print(f"⏰ Player {self.game.current_player.name} exceeded 20 s — auto-resign.")
+                self._resign_game()
+                self.turn_start_time = None
+                self.elapsed_before_pause = 0
+                return
         if self.ui_state == UIState.GAMEPLAY:
             # Handle AI moves
             if (self.game_mode == GameMode.AI_GAME and 
@@ -636,6 +695,15 @@ class GomokuUI:
             # Check for game over
             if self.game.game_state != GameState.PLAYING:
                 self.ui_state = UIState.GAME_OVER
+        # While paused, decrease current player's remaining pause time
+        if self.paused and self.pause_start_time:
+            current_player = self.game.current_player
+            elapsed_pause = time.time() - self.pause_start_time
+            if elapsed_pause >= self.pause_remaining[current_player]:
+                print(f"{current_player.name}'s pause expired automatically")
+                self.paused = False
+                self.pause_start_time = None
+                self.ui_state = UIState.GAMEPLAY
     
     def _draw(self):
         """Draw the current UI state"""
@@ -665,6 +733,50 @@ class GomokuUI:
             self._draw_room_create()
         elif self.ui_state == UIState.ROOM_WAITING:
             self._draw_room_waiting()
+            
+        if self.ui_state in [UIState.GAMEPLAY, UIState.PAUSE_MENU] and (
+            self.turn_start_time or self.elapsed_before_pause
+        ):
+            # Calculate frozen or live remaining time
+            if self.turn_start_time:
+                elapsed = self.elapsed_before_pause + (time.time() - self.turn_start_time)
+            else:
+                elapsed = self.elapsed_before_pause
+            remaining = max(0, int(self.move_time_limit - elapsed))
+
+            # Color logic
+            if remaining > 10:
+                color = Colors.SUCCESS
+            elif remaining > 5:
+                color = Colors.WARNING
+            else:
+                color = Colors.ERROR
+
+            # === 1️⃣ Main move timer ===
+            timer_rect = pygame.Rect(self.WINDOW_WIDTH - 180, 20, 130, 45)
+            pygame.draw.rect(self.screen, Colors.BACKGROUND, timer_rect)   # flat background
+            pygame.draw.rect(self.screen, color, timer_rect, 2)       # no radius
+            timer_text = self.font_medium.render(f"{remaining:02d}s", True, color)
+            self.screen.blit(timer_text, timer_text.get_rect(center=timer_rect.center))
+
+            # === 2️⃣ Pause info boxes (below main timer) ===
+            y = 10
+            box_width = 200
+            box_height = 36
+            for player in [Player.BLACK, Player.WHITE]:
+                label = self.player_names[player]
+                pauses_left = self.pause_allowance[player]
+                pause_time = self.pause_remaining[player]
+
+                pause_rect = pygame.Rect(20, y, box_width, box_height)
+                pygame.draw.rect(self.screen, Colors.BACKGROUND, pause_rect)
+                pygame.draw.rect(self.screen, Colors.TEXT_SECONDARY, pause_rect, 2)
+
+                pause_text = f"{label}: {pauses_left}× {pause_time}s"
+                text_surface = self.font_small.render(pause_text, True, Colors.TEXT_SECONDARY)
+                self.screen.blit(text_surface, text_surface.get_rect(center=pause_rect.center))
+
+                y += box_height + 8
         
         pygame.display.flip()
     
@@ -724,6 +836,20 @@ class GomokuUI:
         
         # Draw pause menu
         title = self.font_large.render("PAUSED", True, Colors.WHITE)
+        # === Show live pause countdown while paused ===
+        if self.paused and self.pause_start_time:
+            current_player = self.game.current_player
+            elapsed_pause = time.time() - self.pause_start_time
+            remaining_pause = max(0, int(self.pause_remaining[current_player] - elapsed_pause))
+
+            # Centered rectangle box
+            pause_rect = pygame.Rect(self.WINDOW_WIDTH // 2 - 80, 240, 160, 50)
+            pygame.draw.rect(self.screen, Colors.BACKGROUND, pause_rect)
+            pygame.draw.rect(self.screen, Colors.WARNING, pause_rect, 2)
+
+            pause_text = self.font_medium.render(f"Pause: {remaining_pause:02d}s", True, Colors.WARNING)
+            self.screen.blit(pause_text, pause_text.get_rect(center=pause_rect.center))
+
         title_rect = title.get_rect(center=(self.WINDOW_WIDTH // 2, 150))
         self.screen.blit(title, title_rect)
         
@@ -744,11 +870,11 @@ class GomokuUI:
         # Draw game over message with player names
         if self.game.game_state == GameState.BLACK_WINS:
             winner_name = self.player_names.get(Player.BLACK, "Black")
-            message = f"{winner_name} Wins!"
+            message = f"{winner_name} WINS!"
             color = Colors.WHITE
         elif self.game.game_state == GameState.WHITE_WINS:
             winner_name = self.player_names.get(Player.WHITE, "White")
-            message = f"{winner_name} Wins!"
+            message = f"{winner_name} WINS!"
             color = Colors.WHITE
         else:
             message = "Draw!"
@@ -1069,8 +1195,8 @@ class GomokuUI:
     
     def _draw_game_info(self):
         """Draw game information panel (adjusted for 800px width)"""
-        info_x = 460  # Adjusted for new board position
-        info_y = 100  # Moved up to align with new board position
+        info_x = 520  # Adjusted for new board position
+        info_y = 120  # Moved up to align with new board position
         
         # Player names
         black_name = self.player_names.get(Player.BLACK, "Player 1")
@@ -1195,6 +1321,9 @@ class GomokuUI:
         """Make a move on the board"""
         if self.game.make_move(row, col):
             self.last_move_pos = (row, col)
+            # Reset turn timer after valid move
+            self.turn_start_time = time.time()  
+            self.elapsed_before_pause = 0
             
             # Send move over network if needed
             if self.is_network_game and self.network_manager:
@@ -1209,6 +1338,9 @@ class GomokuUI:
             if self.game.is_valid_move(row, col):
                 if self.game.make_move(row, col):
                     self.last_move_pos = (row, col)
+                    # Reset turn timer after valid move
+                    self.turn_start_time = time.time()
+                    self.elapsed_before_pause = 0
                     print(f"Network move applied: ({row}, {col})")
                 else:
                     print(f"Failed to apply network move: ({row}, {col})")
