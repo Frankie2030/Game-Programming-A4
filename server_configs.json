@@ -1,0 +1,49 @@
+{
+  "current_config": "Local Development",
+  "configs": {
+    "Local Development": {
+      "name": "Local Development",
+      "server_type": "localhost",
+      "host": "localhost",
+      "port": 12345,
+      "use_ssl": false,
+      "api_key": null,
+      "region": null,
+      "function_name": null,
+      "description": "Local development server"
+    },
+    "Local Network": {
+      "name": "Local Network",
+      "server_type": "localhost",
+      "host": "0.0.0.0",
+      "port": 12345,
+      "use_ssl": false,
+      "api_key": null,
+      "region": null,
+      "function_name": null,
+      "description": "Local network server (accessible from other devices)"
+    },
+    "AWS Lambda (Example)": {
+      "name": "AWS Lambda (Example)",
+      "server_type": "aws_lambda",
+      "host": "your-api-gateway-url.amazonaws.com",
+      "port": 443,
+      "use_ssl": true,
+      "api_key": null,
+      "region": "us-east-1",
+      "function_name": "gomoku-server",
+      "description": "AWS Lambda serverless deployment"
+    },
+    "Azure Functions (Example)": {
+      "name": "Azure Functions (Example)",
+      "server_type": "azure_functions",
+      "host": "your-function-app.azurewebsites.net",
+      "port": 443,
+      "use_ssl": true,
+      "api_key": null,
+      "region": null,
+      "function_name": "gomoku-server",
+      "description": "Azure Functions serverless deployment"
+    }
+  }
+}
