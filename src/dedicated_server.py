@@ -382,6 +382,24 @@ class DedicatedGomokuServer:
         
         elif msg_type == "new_game_response":
             self._handle_new_game_response(client_id, data)
+            
+        # --- NEW ADDITION ---
+        elif msg_type in ["player_pause", "player_resume"]:
+            player = self.players.get(client_id)
+            if not player or not player.room_id:
+                return
+            room_id = player.room_id
+            if room_id not in self.rooms:
+                return
+
+            # Relay pause/resume to all other players in the room
+            forward_message = {
+                "type": msg_type,
+                "data": data
+            }
+            self._broadcast_to_room(room_id, forward_message, exclude_client=client_id)
+            print(f"🔄 Forwarded {msg_type} from {player.name} to room {room_id}")
+
     
     def _send_to_client(self, client_id: str, message: Dict[str, Any]):
         """Send message to a specific client"""

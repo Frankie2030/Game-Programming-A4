@@ -143,6 +143,7 @@ class GomokuUI:
         self.ai_difficulty = "medium"
         self.network_manager = None
         self.is_network_game = False
+        self.pause_initiator = None  # Tracks who initiated the pause
         # === Turn Timer ===
         self.turn_start_time = None
         self.move_time_limit = 20  # seconds
@@ -150,6 +151,7 @@ class GomokuUI:
 
         # Pause control per player
         self.paused = False
+        self.pause_sent = False  # prevents multiple pause sends per click
         self.pause_start_time = None
         self.pause_allowance = {Player.BLACK: 2, Player.WHITE: 2}
         self.pause_remaining = {Player.BLACK: 30, Player.WHITE: 30}
@@ -404,62 +406,100 @@ class GomokuUI:
     def _handle_gameplay_events(self, event):
         """Handle gameplay events"""
         buttons = self.buttons["gameplay"]
-        
-        # Handle button clicks
+
+        # Handle button clicks (require actual click on the button)
         for i, button in enumerate(buttons):
-            if button.handle_event(event):
+            if button.handle_event(event):  # ← gate all actions on a real button click
                 if i == 0:  # Pause
-                    if not self.paused and self.pause_allowance[self.game.current_player] > 0:
+                    if (not self.paused
+                            and not self.pause_sent
+                            and self.pause_allowance[self.game.current_player] > 0):
                         self.paused = True
+                        self.pause_initiator = self.my_player
+                        self.pause_sent = True  # prevent multiple sends per press
                         self.ui_state = UIState.PAUSE_MENU
                         self.pause_start_time = time.time()
                         self.pause_allowance[self.game.current_player] -= 1
 
-                        # Freeze elapsed time so far
+                        # Calculate remaining time on the move timer
                         if self.turn_start_time:
-                            self.elapsed_before_pause += time.time() - self.turn_start_time
-                            self.turn_start_time = None  # stop timing
+                            elapsed_time = time.time() - self.turn_start_time
+                            remaining_turn = max(0, self.move_time_limit - elapsed_time)
+                            self.elapsed_before_pause += elapsed_time
+                            self.turn_start_time = None
+                        else:
+                            remaining_turn = max(0, self.move_time_limit - self.elapsed_before_pause)
+
+                        # Send pause signal only once
+                        if self.is_network_game and self.network_manager:
+                            self.network_manager.send_message("player_pause", {
+                                "player": self.player_names[self.game.current_player],
+                                "remaining_turn": remaining_turn
+                            })
 
                         print(f"{self.game.current_player.name} paused the game "
                             f"({self.pause_allowance[self.game.current_player]} pauses left)")
-                    else:
-                        print("No pauses left or already paused")
 
-        
-        # Handle board clicks
+                elif i == 1:  # Resign
+                    self._resign_game()
+
+        # Reset debounce when mouse is released (so next click can pause again)
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self.pause_sent = False
+
+        # Handle board clicks for making moves (only on left click down)
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self._can_make_move():
                 pos = self._get_board_position(event.pos)
                 if pos:
                     self._make_move(pos[0], pos[1])
-    
+
     def _handle_pause_menu_events(self, event):
         """Handle pause menu events"""
         buttons = self.buttons["pause_menu"]
-        
+
         for i, button in enumerate(buttons):
             if button.handle_event(event):
                 if i == 0:  # Resume
                     current_player = self.game.current_player
+
+                    # Only initiator can resume
+                    if self.is_network_game and self.my_player != self.pause_initiator:
+                        print(f"⏸ You cannot resume — waiting for {self.player_names[self.pause_initiator]} to resume.")
+                        return
+
                     if self.paused and self.pause_start_time:
                         elapsed_pause = time.time() - self.pause_start_time
                         self.pause_remaining[current_player] = max(
                             0, self.pause_remaining[current_player] - int(elapsed_pause)
                         )
+
+                        # Clear pause state & debounce
                         self.paused = False
                         self.pause_start_time = None
+                        self.pause_sent = False  # ← important: allow future pauses
 
-                        # Resume clock from where it stopped
+                        # Resume move timer from where it left off
+                        remaining_turn = max(0, self.move_time_limit - self.elapsed_before_pause)
                         self.turn_start_time = time.time()
                         print(f"{current_player.name} resumed — "
-                            f"{self.pause_remaining[current_player]} s pause time left")
+                            f"{self.pause_remaining[current_player]} s pause time left, "
+                            f"{remaining_turn}s remaining turn time")
 
-                    self.ui_state = UIState.GAMEPLAY
+                        self.ui_state = UIState.GAMEPLAY
+
+                        # Notify opponent when resuming
+                        if self.is_network_game and self.network_manager:
+                            self.network_manager.send_message("player_resume", {
+                                "player": self.player_names[self.game.current_player],
+                                "remaining_turn": remaining_turn
+                            })
 
                 elif i == 1:  # Save Game
                     self._save_game()
                 elif i == 2:  # Main Menu
                     self._return_to_main_menu()
+
     
     def _handle_game_over_events(self, event):
         """Handle game over events"""
@@ -843,7 +883,7 @@ class GomokuUI:
             remaining_pause = max(0, int(self.pause_remaining[current_player] - elapsed_pause))
 
             # Centered rectangle box
-            pause_rect = pygame.Rect(self.WINDOW_WIDTH // 2 - 80, 240, 160, 50)
+            pause_rect = pygame.Rect(self.WINDOW_WIDTH // 2 - 80, 180, 160, 50)
             pygame.draw.rect(self.screen, Colors.BACKGROUND, pause_rect)
             pygame.draw.rect(self.screen, Colors.WARNING, pause_rect, 2)
 
@@ -854,6 +894,14 @@ class GomokuUI:
         self.screen.blit(title, title_rect)
         
         for button in self.buttons["pause_menu"]:
+            button.draw(self.screen)
+        for button in self.buttons["pause_menu"]:
+            # Disable Resume if not allowed
+            if button.text == "Resume":
+                if self.is_network_game and self.pause_initiator and self.pause_initiator != self.my_player:
+                    button.enabled = False
+                else:
+                    button.enabled = True
             button.draw(self.screen)
     
     def _draw_game_over(self):
@@ -1499,6 +1547,43 @@ class GomokuUI:
                         self.ui_state = UIState.ROOM_WAITING
                 else:
                     print(f"Room operation failed: {data.get('error', 'Unknown error')}")
+                    
+            def handle_player_pause(data):
+                sender = data.get("player", "Unknown")
+                remaining_turn = data.get("remaining_turn", None)
+                print(f"🔶 Received pause signal from {sender}")
+
+                # Freeze game on both sides
+                self.paused = True
+                self.ui_state = UIState.PAUSE_MENU
+                self.pause_start_time = time.time()
+                # Record who paused — determine opponent
+                if self.my_player == Player.BLACK:
+                    self.pause_initiator = Player.WHITE
+                else:
+                    self.pause_initiator = Player.BLACK
+
+                # Synchronize timer with sender
+                if remaining_turn is not None:
+                    self.turn_start_time = None
+                    self.elapsed_before_pause = self.move_time_limit - remaining_turn
+                    print(f"Synchronized pause — remaining turn time: {remaining_turn}s")
+
+            def handle_player_resume(data):
+                sender = data.get("player", "Unknown")
+                remaining_turn = data.get("remaining_turn", None)
+                print(f"▶️ Received resume signal from {sender}")
+
+                self.paused = False
+                self.pause_start_time = None
+                self.ui_state = UIState.GAMEPLAY
+                self.pause_initiator = None  # Reset pause owner
+
+                # Sync countdown continuation
+                if remaining_turn is not None:
+                    self.elapsed_before_pause = self.move_time_limit - remaining_turn
+                    self.turn_start_time = time.time()
+                    print(f"Synchronized resume — remaining turn: {remaining_turn}s")
             
             def handle_game_start(data):
                 print("Game starting!")
@@ -1557,6 +1642,8 @@ class GomokuUI:
             self.network_manager.set_message_handler("game_move", handle_game_move)
             self.network_manager.set_message_handler("new_game_request", handle_new_game_request)
             self.network_manager.set_message_handler("new_game_response", handle_new_game_response)
+            self.network_manager.set_message_handler("player_pause", handle_player_pause)
+            self.network_manager.set_message_handler("player_resume", handle_player_resume)
             
             # Get server configuration
             server_config = self.server_config_manager.get_current_config()
