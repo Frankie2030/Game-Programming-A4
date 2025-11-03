@@ -1,9 +1,9 @@
 {
-  "current_config": "Local Network",
+  "current_config": "Local Development",
   "configs": {
     "Local Development": {
       "name": "Local Development",
-      "server_type": "localhost",
+      "server_type": "0.0.0.0",
       "host": "localhost",
       "port": 12345,
       "use_ssl": false,
@@ -14,7 +14,7 @@
     },
     "Local Network": {
       "name": "Local Network",
-      "server_type": "localhost",
+      "server_type": "0.0.0.0",
       "host": "0.0.0.0",
       "port": 12345,
       "use_ssl": false,
@@ -23,10 +23,10 @@
       "function_name": null,
       "description": "Local network server (accessible from other devices)"
     },
-    "AWS": {
-      "name": "EC2",
-      "server_type": "aws_ec2",
-      "host": "ec2-18-142-249-87.ap-southeast-1.compute.amazonaws.com",
+    "AWS Lambda (Example)": {
+      "name": "AWS Lambda (Example)",
+      "server_type": "aws_lambda",
+      "host": "your-api-gateway-url.amazonaws.com",
       "port": 443,
       "use_ssl": true,
       "api_key": null,

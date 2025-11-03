@@ -151,10 +151,10 @@ class GomokuUI:
 
         # Pause control per player
         self.paused = False
-        self.pause_sent = False  # prevents multiple pause sends per click
+        self.pause_sent = False
         self.pause_start_time = None
-        self.pause_allowance = {Player.BLACK: 2, Player.WHITE: 2}
-        self.pause_remaining = {Player.BLACK: 30, Player.WHITE: 30}
+        self.pause_allowance = {Player.BLACK: 2, Player.WHITE: 2}  # tokens
+        self.per_pause_limit = 30  # seconds (limit per individual pause, not cumulative)
         
         # AI threading
         self.ai_thinking = False
@@ -189,6 +189,10 @@ class GomokuUI:
         self.current_room_list = []
         self.selected_room = None
         self.room_info = None
+        
+        # Room & reconnection state
+        self.room_id = None
+        self.reconnect_info = None
         
         # Text input state
         self.text_input_active = False
@@ -416,30 +420,24 @@ class GomokuUI:
                             and self.pause_allowance[self.game.current_player] > 0):
                         self.paused = True
                         self.pause_initiator = self.my_player
-                        self.pause_sent = True  # prevent multiple sends per press
+                        self.pause_sent = True
                         self.ui_state = UIState.PAUSE_MENU
                         self.pause_start_time = time.time()
-                        self.pause_allowance[self.game.current_player] -= 1
+                        self.pause_allowance[self.game.current_player] -= 1  # consume 1 token
 
-                        # Calculate remaining time on the move timer
+                        # Freeze/Sync the move timer
                         if self.turn_start_time:
                             elapsed_time = time.time() - self.turn_start_time
-                            remaining_turn = max(0, self.move_time_limit - elapsed_time)
                             self.elapsed_before_pause += elapsed_time
                             self.turn_start_time = None
-                        else:
-                            remaining_turn = max(0, self.move_time_limit - self.elapsed_before_pause)
 
-                        # Send pause signal only once
                         if self.is_network_game and self.network_manager:
+                            # Share the remaining move time (not pause limit)
+                            remaining_turn = max(0, self.move_time_limit - self.elapsed_before_pause)
                             self.network_manager.send_message("player_pause", {
                                 "player": self.player_names[self.game.current_player],
                                 "remaining_turn": remaining_turn
                             })
-
-                        print(f"{self.game.current_player.name} paused the game "
-                            f"({self.pause_allowance[self.game.current_player]} pauses left)")
-
                 elif i == 1:  # Resign
                     self._resign_game()
 
@@ -461,40 +459,28 @@ class GomokuUI:
         for i, button in enumerate(buttons):
             if button.handle_event(event):
                 if i == 0:  # Resume
-                    current_player = self.game.current_player
-
-                    # Only initiator can resume
+                    # Only initiator can resume (in network games)
                     if self.is_network_game and self.my_player != self.pause_initiator:
                         print(f"⏸ You cannot resume — waiting for {self.player_names[self.pause_initiator]} to resume.")
                         return
 
-                    if self.paused and self.pause_start_time:
-                        elapsed_pause = time.time() - self.pause_start_time
-                        self.pause_remaining[current_player] = max(
-                            0, self.pause_remaining[current_player] - int(elapsed_pause)
-                        )
+                    # Clear pause state
+                    self.paused = False
+                    self.pause_start_time = None
+                    self.pause_sent = False  # allow future pauses again
 
-                        # Clear pause state & debounce
-                        self.paused = False
-                        self.pause_start_time = None
-                        self.pause_sent = False  # ← important: allow future pauses
+                    # Resume move timer from where it left off
+                    remaining_turn = max(0, self.move_time_limit - self.elapsed_before_pause)
+                    self.turn_start_time = time.time()
 
-                        # Resume move timer from where it left off
-                        remaining_turn = max(0, self.move_time_limit - self.elapsed_before_pause)
-                        self.turn_start_time = time.time()
-                        print(f"{current_player.name} resumed — "
-                            f"{self.pause_remaining[current_player]} s pause time left, "
-                            f"{remaining_turn}s remaining turn time")
+                    self.ui_state = UIState.GAMEPLAY
 
-                        self.ui_state = UIState.GAMEPLAY
-
-                        # Notify opponent when resuming
-                        if self.is_network_game and self.network_manager:
-                            self.network_manager.send_message("player_resume", {
-                                "player": self.player_names[self.game.current_player],
-                                "remaining_turn": remaining_turn
-                            })
-
+                    # Notify opponent when resuming
+                    if self.is_network_game and self.network_manager:
+                        self.network_manager.send_message("player_resume", {
+                            "player": self.player_names[self.game.current_player],
+                            "remaining_turn": remaining_turn
+                        })
                 elif i == 1:  # Save Game
                     self._save_game()
                 elif i == 2:  # Main Menu
@@ -735,15 +721,18 @@ class GomokuUI:
             # Check for game over
             if self.game.game_state != GameState.PLAYING:
                 self.ui_state = UIState.GAME_OVER
-        # While paused, decrease current player's remaining pause time
+        # While paused, auto-resume after per-pause limit (no cumulative depletion)
         if self.paused and self.pause_start_time:
-            current_player = self.game.current_player
             elapsed_pause = time.time() - self.pause_start_time
-            if elapsed_pause >= self.pause_remaining[current_player]:
-                print(f"{current_player.name}'s pause expired automatically")
+            if elapsed_pause >= self.per_pause_limit:
+                print("Pause expired automatically")
                 self.paused = False
                 self.pause_start_time = None
+                self.pause_sent = False
                 self.ui_state = UIState.GAMEPLAY
+
+                # Resume move timer from where it left off
+                self.turn_start_time = time.time()
     
     def _draw(self):
         """Draw the current UI state"""
@@ -806,7 +795,7 @@ class GomokuUI:
             for player in [Player.BLACK, Player.WHITE]:
                 label = self.player_names[player]
                 pauses_left = self.pause_allowance[player]
-                pause_time = self.pause_remaining[player]
+                pause_time = self.per_pause_limit  # constant per pause, not a running pool
 
                 pause_rect = pygame.Rect(20, y, box_width, box_height)
                 pygame.draw.rect(self.screen, Colors.BACKGROUND, pause_rect)
@@ -815,9 +804,7 @@ class GomokuUI:
                 pause_text = f"{label}: {pauses_left}× {pause_time}s"
                 text_surface = self.font_small.render(pause_text, True, Colors.TEXT_SECONDARY)
                 self.screen.blit(text_surface, text_surface.get_rect(center=pause_rect.center))
-
                 y += box_height + 8
-        
         pygame.display.flip()
     
     def _draw_main_menu(self):
@@ -878,11 +865,9 @@ class GomokuUI:
         title = self.font_large.render("PAUSED", True, Colors.WHITE)
         # === Show live pause countdown while paused ===
         if self.paused and self.pause_start_time:
-            current_player = self.game.current_player
             elapsed_pause = time.time() - self.pause_start_time
-            remaining_pause = max(0, int(self.pause_remaining[current_player] - elapsed_pause))
+            remaining_pause = max(0, int(self.per_pause_limit - elapsed_pause))
 
-            # Centered rectangle box
             pause_rect = pygame.Rect(self.WINDOW_WIDTH // 2 - 80, 180, 160, 50)
             pygame.draw.rect(self.screen, Colors.BACKGROUND, pause_rect)
             pygame.draw.rect(self.screen, Colors.WARNING, pause_rect, 2)
@@ -1399,6 +1384,14 @@ class GomokuUI:
     
     def _start_new_game(self):
         """Start a new game"""
+        # Reset all timers and pause info
+        self.turn_start_time = None
+        self.elapsed_before_pause = 0
+        self.paused = False
+        self.pause_sent = False
+        self.pause_start_time = None
+        # Reset pause allowances for both players
+        self.pause_allowance = {Player.BLACK: 2, Player.WHITE: 2}
         # Clean up any running AI threads
         self.ai_thinking = False
         self.ai_move_result = None
@@ -1498,14 +1491,22 @@ class GomokuUI:
             print(f"Error loading game: {e}")
     
     def _resign_game(self):
-        """Resign the current game"""
+        """Resign the current game (local + network safe)"""
+        if self.is_network_game and self.network_manager:
+            print(f"🏳️ {self.player_name} is resigning...")
+            self.network_manager.send_message("player_resign", {
+                "player": self.player_names[self.my_player]
+            })
+            return  # wait for ack
+
+        # Local fallback
         if self.game.current_player == Player.BLACK:
             self.game.game_state = GameState.WHITE_WINS
             self.game.winner = Player.WHITE
         else:
             self.game.game_state = GameState.BLACK_WINS
             self.game.winner = Player.BLACK
-        
+
         self.ui_state = UIState.GAME_OVER
     
     def _return_to_main_menu(self):
@@ -1543,10 +1544,17 @@ class GomokuUI:
                 if data.get("success"):
                     self.room_info = data.get("room_info")
                     if self.room_info:
+                        self.room_id = self.room_info.get("room_id")
                         print(f"Joined/Created room: {self.room_info}")
+
+                        # Store reconnect info
+                        self.reconnect_info = {
+                            "player_name": self.player_name,
+                            "room_id": self.room_id
+                        }
+                        print(f"Reconnection info stored: {self.reconnect_info}")
+
                         self.ui_state = UIState.ROOM_WAITING
-                else:
-                    print(f"Room operation failed: {data.get('error', 'Unknown error')}")
                     
             def handle_player_pause(data):
                 sender = data.get("player", "Unknown")
@@ -1634,6 +1642,94 @@ class GomokuUI:
                 else:
                     print("Opponent declined new game")
             
+            def handle_player_resign(data):
+                """Triggered when opponent resigns"""
+                resigned_player = data.get("player", "Unknown")
+                print(f"🏳️ Opponent {resigned_player} resigned.")
+
+                # End the game correctly
+                if self.my_player == Player.BLACK:
+                    winner = Player.BLACK if self.game.current_player == Player.BLACK else Player.WHITE
+                else:
+                    winner = Player.WHITE if self.game.current_player == Player.WHITE else Player.BLACK
+
+                # Opponent resigned → you are the winner
+                self.game.winner = self.my_player
+                self.game.game_state = (
+                    GameState.BLACK_WINS if self.my_player == Player.BLACK else GameState.WHITE_WINS
+                )
+                self.ui_state = UIState.GAME_OVER
+                print(f"🎉 You win! Opponent {resigned_player} has resigned.")
+
+            def handle_resign_ack(data):
+                """Triggered when server confirms your resignation"""
+                msg = data.get("message", "You have resigned.")
+                print(f"✅ Server acknowledged resignation: {msg}")
+
+                # You lose
+                self.ui_state = UIState.GAME_OVER
+                self.game.game_state = (
+                    GameState.WHITE_WINS if self.my_player == Player.BLACK else GameState.BLACK_WINS
+                )
+                self.game.winner = (
+                    Player.WHITE if self.my_player == Player.BLACK else Player.BLACK
+                )
+                
+            def handle_reconnect_success(data):
+                print("🔁 Reconnected successfully!")
+                self.room_id = data.get("room_id")
+
+                board = data.get("board", [])
+                moves = data.get("moves", [])
+                current_player = data.get("current_player", 1)
+                players = data.get("players", [])
+
+                try:
+                    # --- 🧠 Rebuild game board completely ---
+                    if board and isinstance(board[0], list):
+                        for r in range(len(board)):
+                            for c in range(len(board[r])):
+                                cell = board[r][c]
+                                self.game.board[r][c] = Player(cell) if cell in [0, 1, 2] else Player.EMPTY
+
+                    # --- 🧩 Rebuild move history ---
+                    from gomoku_game import Move
+                    self.game.move_history.clear()
+                    for mv in moves:
+                        if isinstance(mv, dict):
+                            row, col = mv.get("row"), mv.get("col")
+                            player_name = mv.get("player")
+                            # Determine player ID by name lookup
+                            if players and player_name == players[0]:
+                                player = Player.BLACK
+                            else:
+                                player = Player.WHITE
+                            self.game.move_history.append(Move(row, col, player))
+                        elif isinstance(mv, (list, tuple)) and len(mv) >= 3:
+                            self.game.move_history.append(Move(mv[0], mv[1], Player(mv[2])))
+
+                    # --- 🎯 Restore last move marker ---
+                    if self.game.move_history:
+                        last_move = self.game.move_history[-1]
+                        self.last_move_pos = (last_move.row, last_move.col)
+
+                    # --- 🎮 Restore turn and UI state ---
+                    self.game.current_player = Player(current_player)
+                    self.ui_state = UIState.GAMEPLAY
+                    self.paused = False
+                    self.turn_start_time = time.time()
+                    self.elapsed_before_pause = 0
+
+                    # --- 🖼️ Force board redraw ---
+                    self.game.game_state = GameState.PLAYING
+                    self._draw_board()
+                    pygame.display.flip()
+
+                    print(f"✅ Restored {len(moves)} moves and board ({sum(cell != 0 for row in board for cell in row)} stones), turn: {self.game.current_player.name}")
+
+                except Exception as e:
+                    print(f"⚠️ Error restoring reconnect state: {e}")
+
             self.network_manager.set_connection_callback("connect", handle_connect)
             self.network_manager.set_connection_callback("disconnect", handle_disconnect)
             self.network_manager.set_message_handler("room_list", handle_room_list)
@@ -1644,6 +1740,9 @@ class GomokuUI:
             self.network_manager.set_message_handler("new_game_response", handle_new_game_response)
             self.network_manager.set_message_handler("player_pause", handle_player_pause)
             self.network_manager.set_message_handler("player_resume", handle_player_resume)
+            self.network_manager.set_message_handler("player_resign", handle_player_resign)
+            self.network_manager.set_message_handler("resign_ack", handle_resign_ack)
+            self.network_manager.set_message_handler("reconnect_success", handle_reconnect_success)
             
             # Get server configuration
             server_config = self.server_config_manager.get_current_config()
@@ -1653,6 +1752,10 @@ class GomokuUI:
                 
                 if self.network_manager.connect(host, port):
                     print("Connecting to lobby...")
+                    # Attempt to resume old game if info exists
+                    if self.reconnect_info:
+                        print(f"Attempting to reconnect to previous room: {self.reconnect_info}")
+                        self.network_manager.send_message("player_reconnect", self.reconnect_info)
                 else:
                     print(f"Failed to connect to server {server_config.name}")
             else:
