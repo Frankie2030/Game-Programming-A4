@@ -13,7 +13,7 @@ from enum import Enum
 class ServerType(Enum):
     """Server deployment types"""
     LOCALHOST = "0.0.0.0"
-    AWS_LAMBDA = "aws_lambda"
+    AWS_EC2 = "aws_ec2"
     AZURE_FUNCTIONS = "azure_functions"
     CUSTOM = "custom"
 
@@ -98,30 +98,10 @@ class ServerConfigManager:
                 description="Local development server"
             ),
             ServerConfig(
-                name="Local Network",
-                server_type=ServerType.LOCALHOST,
-                host="0.0.0.0",
-                port=12345,
-                description="Local network server (accessible from other devices)"
-            ),
-            ServerConfig(
-                name="AWS Lambda (Example)",
-                server_type=ServerType.AWS_LAMBDA,
-                host="your-api-gateway-url.amazonaws.com",
-                port=443,
-                use_ssl=True,
-                region="us-east-1",
-                function_name="gomoku-server",
-                description="AWS Lambda serverless deployment"
-            ),
-            ServerConfig(
-                name="Azure Functions (Example)",
-                server_type=ServerType.AZURE_FUNCTIONS,
-                host="your-function-app.azurewebsites.net",
-                port=443,
-                use_ssl=True,
-                function_name="gomoku-server",
-                description="Azure Functions serverless deployment"
+                name="AWS EC2",
+                server_type=ServerType.AWS_EC2,
+                host="18.142.249.87",
+                port=12345
             )
         ]
         
