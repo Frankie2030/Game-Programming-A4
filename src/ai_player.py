@@ -21,6 +21,23 @@ class AIPlayer:
         self.nodes_evaluated = 0
         self.search_time = 0
         
+        # Debug statistics
+        self.pruning_count = 0  # Number of alpha-beta prunings
+        self.max_depth_reached = 0  # Maximum depth reached in search
+        self.nodes_by_depth = {}  # Count nodes at each depth
+        self.move_evaluations = []  # Store move evaluations for debugging
+        self.current_search_depth = 0  # Track current search depth
+        
+        # Real-time thinking state (updated during search for UI display)
+        self.real_time_stats = {
+            "current_moves": [],  # Moves currently being evaluated
+            "best_move_so_far": None,
+            "best_score_so_far": float('-inf'),
+            "nodes_evaluated": 0,
+            "current_depth": 0,
+            "is_thinking": False
+        }
+        
         # Difficulty settings
         self.difficulty_settings = {
             "easy": {"max_depth": 2, "time_limit": 1.0, "use_smart_moves": False},
@@ -49,6 +66,22 @@ class AIPlayer:
         
         # Reset statistics
         self.nodes_evaluated = 0
+        self.pruning_count = 0
+        self.max_depth_reached = 0
+        self.nodes_by_depth = {}
+        self.move_evaluations = []
+        self.current_search_depth = 0
+        
+        # Reset real-time stats
+        self.real_time_stats = {
+            "current_moves": [],
+            "best_move_so_far": None,
+            "best_score_so_far": float('-inf'),
+            "nodes_evaluated": 0,
+            "current_depth": 0,
+            "is_thinking": True
+        }
+        
         start_time = time.time()
         
         # Get candidate moves
@@ -74,11 +107,19 @@ class AIPlayer:
             if time.time() - start_time > settings["time_limit"]:
                 break
             
+            # Update real-time stats
+            self.real_time_stats["current_depth"] = depth
+            self.real_time_stats["nodes_evaluated"] = self.nodes_evaluated
+            
             try:
                 move, score = self._minimax_root(game, depth, legal_moves, 
                                                start_time, settings["time_limit"])
                 if move:
                     best_move = move
+                    # Update best move in real-time stats
+                    if score > self.real_time_stats["best_score_so_far"]:
+                        self.real_time_stats["best_move_so_far"] = move
+                        self.real_time_stats["best_score_so_far"] = score
                     
                 # If we found a winning move, stop searching
                 if score >= 9000:
@@ -88,12 +129,14 @@ class AIPlayer:
                 break
         
         self.search_time = time.time() - start_time
+        self.real_time_stats["is_thinking"] = False
         return best_move
     
     def _minimax_root(self, game: GomokuGame, max_depth: int, 
                      legal_moves: List[Tuple[int, int]], 
                      start_time: float, time_limit: float) -> Tuple[Optional[Tuple[int, int]], int]:
         """Root level minimax search"""
+        self.current_search_depth = max_depth
         best_move = None
         best_score = float('-inf')
         
@@ -112,32 +155,86 @@ class AIPlayer:
         alpha = float('-inf')
         beta = float('inf')
         
-        for _, (row, col) in scored_moves:
+        # Track root-level move evaluations
+        root_evaluations = []
+        
+        for move_idx, (_, (row, col)) in enumerate(scored_moves):
             if time.time() - start_time > time_limit:
                 raise TimeoutError("Search time limit exceeded")
+            
+            # Update real-time stats - show current move being evaluated
+            self.real_time_stats["current_moves"] = [
+                {
+                    "move": (row, col),
+                    "status": "evaluating",
+                    "score": None
+                }
+            ]
             
             game_copy = game.copy()
             game_copy.make_move(row, col)
             
             score = self._minimax(game_copy, max_depth - 1, alpha, beta, False, 
-                                start_time, time_limit)
+                                start_time, time_limit, current_depth=1)
             
+            eval_info = {
+                "move": (row, col),
+                "score": score,
+                "alpha": alpha,
+                "beta": beta
+            }
+            root_evaluations.append(eval_info)
+            
+            # Update real-time stats with completed evaluation
+            self.real_time_stats["current_moves"] = [
+                {
+                    "move": eval_info["move"],
+                    "status": "completed",
+                    "score": eval_info["score"]
+                }
+            ]
+            
+            # Update best move in real-time
             if score > best_score:
                 best_score = score
                 best_move = (row, col)
+                self.real_time_stats["best_move_so_far"] = best_move
+                self.real_time_stats["best_score_so_far"] = best_score
             
             alpha = max(alpha, score)
             if beta <= alpha:
+                self.pruning_count += 1  # Track pruning at root level
                 break  # Alpha-beta pruning
+        
+        # Store all completed evaluations for final display
+        self.move_evaluations = root_evaluations
+        # Update real-time stats with all evaluated moves (sorted)
+        sorted_evals = sorted(root_evaluations, key=lambda x: x['score'], reverse=True)
+        self.real_time_stats["current_moves"] = [
+            {
+                "move": eval_info["move"],
+                "status": "completed",
+                "score": eval_info["score"]
+            }
+            for eval_info in sorted_evals[:10]  # Show top 10 moves
+        ]
         
         return best_move, best_score
     
     def _minimax(self, game: GomokuGame, depth: int, alpha: float, beta: float, 
-                maximizing: bool, start_time: float, time_limit: float) -> int:
+                maximizing: bool, start_time: float, time_limit: float, 
+                current_depth: int = 0) -> int:
         """
         Minimax algorithm with alpha-beta pruning.
         """
         self.nodes_evaluated += 1
+        
+        # Track depth statistics
+        search_depth = self.current_search_depth - depth + current_depth
+        self.max_depth_reached = max(self.max_depth_reached, search_depth)
+        if search_depth not in self.nodes_by_depth:
+            self.nodes_by_depth[search_depth] = 0
+        self.nodes_by_depth[search_depth] += 1
         
         # Check time limit
         if time.time() - start_time > time_limit:
@@ -160,11 +257,12 @@ class AIPlayer:
                 game_copy.make_move(row, col)
                 
                 eval_score = self._minimax(game_copy, depth - 1, alpha, beta, False, 
-                                         start_time, time_limit)
+                                         start_time, time_limit, current_depth + 1)
                 max_eval = max(max_eval, eval_score)
                 alpha = max(alpha, eval_score)
                 
                 if beta <= alpha:
+                    self.pruning_count += 1  # Track pruning
                     break  # Alpha-beta pruning
             
             return max_eval
@@ -175,11 +273,12 @@ class AIPlayer:
                 game_copy.make_move(row, col)
                 
                 eval_score = self._minimax(game_copy, depth - 1, alpha, beta, True, 
-                                         start_time, time_limit)
+                                         start_time, time_limit, current_depth + 1)
                 min_eval = min(min_eval, eval_score)
                 beta = min(beta, eval_score)
                 
                 if beta <= alpha:
+                    self.pruning_count += 1  # Track pruning
                     break  # Alpha-beta pruning
             
             return min_eval
@@ -190,8 +289,17 @@ class AIPlayer:
             "difficulty": self.difficulty,
             "nodes_evaluated": self.nodes_evaluated,
             "search_time": self.search_time,
-            "nodes_per_second": self.nodes_evaluated / max(self.search_time, 0.001)
+            "nodes_per_second": self.nodes_evaluated / max(self.search_time, 0.001),
+            "pruning_count": self.pruning_count,
+            "max_depth_reached": self.max_depth_reached,
+            "nodes_by_depth": self.nodes_by_depth.copy(),
+            "move_evaluations": self.move_evaluations.copy(),
+            "pruning_efficiency": (self.pruning_count / max(self.nodes_evaluated, 1)) * 100 if self.nodes_evaluated > 0 else 0
         }
+    
+    def get_real_time_stats(self) -> dict:
+        """Get real-time thinking statistics for UI display"""
+        return self.real_time_stats.copy()
 
 
 class RandomAI:

@@ -13,6 +13,23 @@ class Player(Enum):
     EMPTY = 0
     BLACK = 1  # First player (X)
     WHITE = 2  # Second player (O)
+    RED = 3    # Third player (for 3+ player games)
+    BLUE = 4   # Fourth player (for 4+ player games)
+    GREEN = 5  # Fifth player (for 5 player games)
+    
+    @classmethod
+    def get_player_by_index(cls, index: int):
+        """Get player by index (0=EMPTY, 1=BLACK, 2=WHITE, etc.)"""
+        players = [cls.EMPTY, cls.BLACK, cls.WHITE, cls.RED, cls.BLUE, cls.GREEN]
+        if 0 <= index < len(players):
+            return players[index]
+        return cls.EMPTY
+    
+    @classmethod
+    def get_all_players(cls, count: int):
+        """Get list of players for a game with count players"""
+        all_players = [cls.BLACK, cls.WHITE, cls.RED, cls.BLUE, cls.GREEN]
+        return all_players[:count]
 
 
 class GameState(Enum):
@@ -44,15 +61,26 @@ class GomokuGame:
     Complete Gomoku game implementation with standard rules.
     Board size: 15x15
     Win condition: 5 stones in a row (horizontal, vertical, diagonal)
+    Supports 2-5 players
     """
     
     BOARD_SIZE = 15
     WIN_LENGTH = 5
     
-    def __init__(self):
+    def __init__(self, num_players: int = 2):
+        """
+        Initialize game with specified number of players (2-5)
+        """
+        if num_players < 2 or num_players > 5:
+            raise ValueError("Number of players must be between 2 and 5")
+        
+        self.num_players = num_players
+        self.players = Player.get_all_players(num_players)
+        self.player_index = 0  # Index into self.players list
+        
         self.board = [[Player.EMPTY for _ in range(self.BOARD_SIZE)] 
                       for _ in range(self.BOARD_SIZE)]
-        self.current_player = Player.BLACK
+        self.current_player = self.players[0]  # Start with first player
         self.move_history = []
         self.game_state = GameState.PLAYING
         self.winner = None
@@ -61,7 +89,8 @@ class GomokuGame:
         """Reset the game to initial state"""
         self.board = [[Player.EMPTY for _ in range(self.BOARD_SIZE)] 
                       for _ in range(self.BOARD_SIZE)]
-        self.current_player = Player.BLACK
+        self.player_index = 0
+        self.current_player = self.players[0]
         self.move_history = []
         self.game_state = GameState.PLAYING
         self.winner = None
@@ -88,15 +117,21 @@ class GomokuGame:
         # Check for win
         if self.check_win(row, col):
             self.winner = self.current_player
+            # Set game state based on winner
             if self.current_player == Player.BLACK:
                 self.game_state = GameState.BLACK_WINS
-            else:
+            elif self.current_player == Player.WHITE:
                 self.game_state = GameState.WHITE_WINS
+            else:
+                # For 3+ player games, use BLACK_WINS as generic win state
+                # The winner is stored in self.winner
+                self.game_state = GameState.BLACK_WINS
         elif self.is_board_full():
             self.game_state = GameState.DRAW
         else:
-            # Switch players
-            self.current_player = Player.WHITE if self.current_player == Player.BLACK else Player.BLACK
+            # Switch to next player in rotation
+            self.player_index = (self.player_index + 1) % len(self.players)
+            self.current_player = self.players[self.player_index]
         
         return True
     

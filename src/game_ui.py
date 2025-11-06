@@ -17,12 +17,16 @@ from ai_player import AIPlayer, RandomAI
 from stable_client import StableGomokuClient
 from server_config import get_server_config, ServerConfig, ServerType
 
+# Initialize pygame mixer for sounds
+pygame.mixer.init()
+
 
 class UIState(Enum):
     """UI state enumeration"""
     MAIN_MENU = "main_menu"
     GAME_MODE_SELECT = "game_mode_select"
     AI_DIFFICULTY_SELECT = "ai_difficulty_select"
+    AI_PLAYER_COUNT_SELECT = "ai_player_count_select"
     NETWORK_SETUP = "network_setup"
     PLAYER_NAME_INPUT = "player_name_input"
     SERVER_SELECT = "server_select"
@@ -33,6 +37,7 @@ class UIState(Enum):
     GAME_OVER = "game_over"
     PAUSE_MENU = "pause_menu"
     SETTINGS = "settings"
+    ABOUT = "about"
 
 
 class GameMode(Enum):
@@ -69,7 +74,7 @@ class Colors:
 
 
 class Button:
-    """Simple button class for UI"""
+    """Modern button class with improved UI/UX"""
     
     def __init__(self, x: int, y: int, width: int, height: int, text: str, 
                  font: pygame.font.Font, color: Tuple[int, int, int] = Colors.LIGHT_GRAY,
@@ -81,6 +86,7 @@ class Button:
         self.text_color = text_color
         self.hovered = False
         self.enabled = True
+        self.hover_alpha = 0
     
     def handle_event(self, event: pygame.event.Event) -> bool:
         """Handle mouse events, return True if clicked"""
@@ -95,16 +101,62 @@ class Button:
         return False
     
     def draw(self, screen: pygame.Surface):
-        """Draw the button"""
-        color = Colors.WHITE if self.hovered and self.enabled else self.color
-        if not self.enabled:
-            color = Colors.GRAY
-            
-        pygame.draw.rect(screen, color, self.rect)
-        pygame.draw.rect(screen, Colors.BLACK, self.rect, 2)
+        """Draw the button with modern effects"""
+        # Update hover animation
+        if self.hovered and self.enabled:
+            self.hover_alpha = min(255, self.hover_alpha + 15)
+        else:
+            self.hover_alpha = max(0, self.hover_alpha - 15)
         
+        # Base button color
+        if not self.enabled:
+            base_color = Colors.GRAY
+        else:
+            base_color = self.color
+        
+        # Draw shadow for depth
+        shadow_rect = pygame.Rect(self.rect.x + 3, self.rect.y + 3, self.rect.width, self.rect.height)
+        shadow_surface = pygame.Surface((shadow_rect.width, shadow_rect.height))
+        shadow_surface.set_alpha(30)
+        shadow_surface.fill(Colors.BLACK)
+        screen.blit(shadow_surface, shadow_rect)
+        
+        # Draw button with rounded corners effect (using gradient-like border)
+        pygame.draw.rect(screen, base_color, self.rect)
+        
+        # Hover effect with smooth transition
+        if self.hover_alpha > 0 and self.enabled:
+            hover_overlay = pygame.Surface((self.rect.width, self.rect.height))
+            hover_overlay.set_alpha(self.hover_alpha // 2)
+            hover_color = (min(255, base_color[0] + 20), 
+                          min(255, base_color[1] + 20), 
+                          min(255, base_color[2] + 20))
+            hover_overlay.fill(hover_color)
+            screen.blit(hover_overlay, self.rect)
+        
+        # Modern border (thinner, softer)
+        border_color = Colors.ACCENT if self.hovered and self.enabled else Colors.DARK_GRAY
+        border_alpha = 200 if self.hovered and self.enabled else 100
+        border_surface = pygame.Surface((self.rect.width, self.rect.height))
+        border_surface.set_alpha(border_alpha)
+        pygame.draw.rect(border_surface, border_color, border_surface.get_rect(), 2)
+        screen.blit(border_surface, self.rect)
+        
+        # Text with shadow for better readability
         text_surface = self.font.render(self.text, True, self.text_color)
         text_rect = text_surface.get_rect(center=self.rect.center)
+        
+        # Text shadow
+        shadow_text = self.font.render(self.text, True, (0, 0, 0))
+        shadow_rect = text_rect.copy()
+        shadow_rect.x += 1
+        shadow_rect.y += 1
+        shadow_surf = pygame.Surface(shadow_text.get_size())
+        shadow_surf.set_alpha(50)
+        shadow_surf.fill((0, 0, 0))
+        screen.blit(shadow_text, shadow_rect)
+        
+        # Main text
         screen.blit(text_surface, text_rect)
 
 
@@ -114,12 +166,12 @@ class GomokuUI:
     def __init__(self):
         pygame.init()
         
-        # Smaller screen settings for side-by-side viewing
-        self.WINDOW_WIDTH = 800   # Reduced from 1000
-        self.WINDOW_HEIGHT = 600  # Reduced from 700
-        self.BOARD_SIZE = 450  # Further reduced to fit better in 800x600
+        # Screen settings (original size)
+        self.WINDOW_WIDTH = 800   # Original size
+        self.WINDOW_HEIGHT = 600  # Original size
+        self.BOARD_SIZE = 450  # Original board size
         self.BOARD_OFFSET_X = 60
-        self.BOARD_OFFSET_Y = 100   # Moved up more to ensure full visibility
+        self.BOARD_OFFSET_Y = 100
         self.CELL_SIZE = self.BOARD_SIZE // GomokuGame.BOARD_SIZE
         
         # Center the window on screen
@@ -130,10 +182,11 @@ class GomokuUI:
         self.screen = pygame.display.set_mode((self.WINDOW_WIDTH, self.WINDOW_HEIGHT))
         pygame.display.set_caption("Gomoku - Five in a Row")
         
-        # Initialize fonts (adjusted for smaller 800x600 screen)
-        self.font_large = pygame.font.Font(None, 42)   # Reduced from 48
-        self.font_medium = pygame.font.Font(None, 28)  # Reduced from 32
-        self.font_small = pygame.font.Font(None, 22)   # Reduced from 24
+        # Initialize fonts (increased sizes for better visibility)
+        self.font_large = pygame.font.Font(None, 56)   # Increased from 42
+        self.font_medium = pygame.font.Font(None, 36)  # Increased from 28
+        self.font_small = pygame.font.Font(None, 28)   # Increased from 22
+        self.font_info = pygame.font.Font(None, 32)    # New: for game info
         
         # Game state
         self.ui_state = UIState.MAIN_MENU
@@ -146,7 +199,7 @@ class GomokuUI:
         self.pause_initiator = None  # Tracks who initiated the pause
         # === Turn Timer ===
         self.turn_start_time = None
-        self.move_time_limit = 20  # seconds
+        self.move_time_limit = 30  # seconds (changed from 20 to 30)
         self.elapsed_before_pause = 0  # how much time elapsed before pausing
 
         # Pause control per player
@@ -163,6 +216,10 @@ class GomokuUI:
         self.thinking_start_time = 0
         self.my_player = Player.BLACK
         self.waiting_for_network = False
+        
+        # AI Debug viewer
+        self.ai_debug_enabled = False  # Toggle with 'D' key
+        self.ai_debug_stats = None  # Store last AI statistics
         
         # Player names for display
         self.player_names = {
@@ -203,12 +260,171 @@ class GomokuUI:
         self.clock = pygame.time.Clock()
         self.running = True
         
+        # Sound system
+        self.sounds_enabled = True
+        self.music_enabled = True
+        self.sounds = {}
+        self.background_music = None
+        self._load_sounds()
+        
+        # Background images
+        self.background_images = {}
+        self._load_background_images()
+        
+        # Start background music automatically
+        self._play_background_music()
+        
         # Initialize UI elements
         self._init_ui_elements()
     
     def check_saved_game(self):
         """Check if a saved game exists"""
         self.saved_game_exists = os.path.exists("saved_game.json")
+    
+    def _load_sounds(self):
+        """Load all sound files"""
+        sound_dir = os.path.join(os.path.dirname(__file__), "sounds")
+        try:
+            # Load sound effects
+            board_start_path = os.path.join(sound_dir, "board-start-38127.mp3")
+            winner_path = os.path.join(sound_dir, "winner-game-sound-404167.mp3")
+            play_turn_path = os.path.join(sound_dir, "play_turn.mp3")
+            background_path = os.path.join(sound_dir, "calm-nature-sounds-196258.mp3")
+            
+            if os.path.exists(board_start_path):
+                self.sounds["board_start"] = pygame.mixer.Sound(board_start_path)
+            if os.path.exists(winner_path):
+                self.sounds["winner"] = pygame.mixer.Sound(winner_path)
+            if os.path.exists(play_turn_path):
+                self.sounds["play_turn"] = pygame.mixer.Sound(play_turn_path)
+            if os.path.exists(background_path):
+                self.background_music = background_path
+            
+            print("✅ Sounds loaded successfully")
+        except Exception as e:
+            print(f"⚠️ Error loading sounds: {e}")
+            self.sounds = {}
+            self.background_music = None
+    
+    def _load_background_images(self):
+        """Load background images"""
+        img_dir = os.path.join(os.path.dirname(__file__), "imgs")
+        try:
+            # Load start image
+            start_image_path = os.path.join(img_dir, "image_start.jpg")
+            if os.path.exists(start_image_path):
+                self.background_images["start"] = pygame.image.load(start_image_path)
+                # Scale to window size
+                self.background_images["start"] = pygame.transform.scale(
+                    self.background_images["start"], 
+                    (self.WINDOW_WIDTH, self.WINDOW_HEIGHT)
+                )
+            
+            # Load game image
+            game_image_path = os.path.join(img_dir, "image_game.webp")
+            if os.path.exists(game_image_path):
+                self.background_images["game"] = pygame.image.load(game_image_path)
+                # Scale to window size
+                self.background_images["game"] = pygame.transform.scale(
+                    self.background_images["game"], 
+                    (self.WINDOW_WIDTH, self.WINDOW_HEIGHT)
+                )
+            
+            print("✅ Background images loaded successfully")
+        except Exception as e:
+            print(f"⚠️ Error loading background images: {e}")
+            self.background_images = {}
+    
+    def _play_sound(self, sound_name: str):
+        """Play a sound effect if sounds are enabled"""
+        if not self.sounds_enabled:
+            return
+        if sound_name in self.sounds:
+            try:
+                self.sounds[sound_name].play()
+            except Exception as e:
+                print(f"⚠️ Error playing sound {sound_name}: {e}")
+    
+    def _play_background_music(self):
+        """Start playing background music if music is enabled"""
+        if not self.music_enabled:
+            return
+        if self.background_music and os.path.exists(self.background_music):
+            try:
+                # Only start music if it's not already playing
+                if not pygame.mixer.music.get_busy():
+                    pygame.mixer.music.load(self.background_music)
+                    pygame.mixer.music.play(-1)  # Loop indefinitely
+                    pygame.mixer.music.set_volume(0.3)  # Lower volume for background
+            except Exception as e:
+                print(f"⚠️ Error playing background music: {e}")
+    
+    def _stop_background_music(self):
+        """Stop background music"""
+        try:
+            pygame.mixer.music.stop()
+        except:
+            pass
+    
+    def _draw_gradient_background(self, use_image=None):
+        """Draw a modern gradient background with optional image"""
+        # Determine which background to use
+        if use_image == "start" and "start" in self.background_images:
+            # Draw start image with overlay
+            self.screen.blit(self.background_images["start"], (0, 0))
+            # Add dark overlay for better text readability
+            overlay = pygame.Surface((self.WINDOW_WIDTH, self.WINDOW_HEIGHT))
+            overlay.set_alpha(120)  # Darker overlay for start screen
+            overlay.fill(Colors.BLACK)
+            self.screen.blit(overlay, (0, 0))
+        elif use_image == "game" and "game" in self.background_images:
+            # Draw game image with subtle overlay
+            self.screen.blit(self.background_images["game"], (0, 0))
+            # Add subtle overlay for better visibility
+            overlay = pygame.Surface((self.WINDOW_WIDTH, self.WINDOW_HEIGHT))
+            overlay.set_alpha(60)  # Lighter overlay for gameplay
+            overlay.fill(Colors.BLACK)
+            self.screen.blit(overlay, (0, 0))
+        else:
+            # Default gradient background
+            # Fill with base color first (faster)
+            self.screen.fill(Colors.BACKGROUND)
+            
+            # Add enhanced gradient overlay with more depth
+            overlay = pygame.Surface((self.WINDOW_WIDTH, self.WINDOW_HEIGHT))
+            overlay.set_alpha(50)  # Increased alpha for more visible effect
+            for y in range(0, self.WINDOW_HEIGHT, 2):  # More lines for smoother gradient
+                ratio = y / self.WINDOW_HEIGHT
+                # More pronounced gradient
+                color_val = int(255 * ratio * 0.15)
+                pygame.draw.line(overlay, (color_val, color_val, color_val), 
+                               (0, y), (self.WINDOW_WIDTH, y), 2)
+            self.screen.blit(overlay, (0, 0))
+            
+            # Add subtle vignette effect (darkened edges) - optimized
+            edge_overlay = pygame.Surface((self.WINDOW_WIDTH, self.WINDOW_HEIGHT))
+            edge_overlay.set_alpha(10)
+            edge_overlay.fill((0, 0, 0))
+            # Create gradient edges by drawing rectangles with decreasing alpha
+            edge_width = 50
+            for i in range(edge_width):
+                alpha = int(10 * (1 - i / edge_width))
+                if alpha > 0:
+                    edge_surf = pygame.Surface((self.WINDOW_WIDTH, 1))
+                    edge_surf.set_alpha(alpha)
+                    edge_surf.fill((0, 0, 0))
+                    # Top edge
+                    self.screen.blit(edge_surf, (0, i))
+                    # Bottom edge
+                    self.screen.blit(edge_surf, (0, self.WINDOW_HEIGHT - 1 - i))
+                    
+                    edge_surf = pygame.Surface((1, self.WINDOW_HEIGHT))
+                    edge_surf.set_alpha(alpha)
+                    edge_surf.fill((0, 0, 0))
+                    # Left edge
+                    self.screen.blit(edge_surf, (i, 0))
+                    # Right edge
+                    self.screen.blit(edge_surf, (self.WINDOW_WIDTH - 1 - i, 0))
     
     def _init_ui_elements(self):
         """Initialize UI elements for different states"""
@@ -217,7 +433,13 @@ class GomokuUI:
             Button(300, 200, 200, 50, "New Game", self.font_medium),
             Button(300, 270, 200, 50, "Continue", self.font_medium),
             Button(300, 340, 200, 50, "Settings", self.font_medium),
-            Button(300, 410, 200, 50, "Quit", self.font_medium)
+            Button(300, 410, 200, 50, "About", self.font_medium),
+            Button(300, 480, 200, 50, "Quit", self.font_medium)
+        ]
+        
+        # About page buttons
+        self.buttons["about"] = [
+            Button(300, 500, 200, 50, "Back", self.font_medium)
         ]
         
         # Game mode selection buttons (centered for 800px width)
@@ -235,6 +457,15 @@ class GomokuUI:
             Button(250, 340, 300, 50, "Hard", self.font_medium),
             Button(250, 410, 300, 50, "Expert", self.font_medium),
             Button(300, 500, 200, 50, "Back", self.font_medium)
+        ]
+        
+        # AI player count selection buttons (for multiple AI opponents)
+        self.buttons["ai_player_count"] = [
+            Button(250, 180, 300, 50, "2 Players (1 vs 1)", self.font_medium),
+            Button(250, 250, 300, 50, "3 Players (1 vs 2 AI)", self.font_medium),
+            Button(250, 320, 300, 50, "4 Players (1 vs 3 AI)", self.font_medium),
+            Button(250, 390, 300, 50, "5 Players (1 vs 4 AI)", self.font_medium),
+            Button(300, 480, 200, 50, "Back", self.font_medium)
         ]
         
         # Network setup buttons
@@ -328,6 +559,8 @@ class GomokuUI:
                 self._handle_game_mode_events(event)
             elif self.ui_state == UIState.AI_DIFFICULTY_SELECT:
                 self._handle_ai_difficulty_events(event)
+            elif self.ui_state == UIState.AI_PLAYER_COUNT_SELECT:
+                self._handle_ai_player_count_events(event)
             elif self.ui_state == UIState.GAMEPLAY:
                 self._handle_gameplay_events(event)
             elif self.ui_state == UIState.PAUSE_MENU:
@@ -346,6 +579,8 @@ class GomokuUI:
                 self._handle_room_create_events(event)
             elif self.ui_state == UIState.ROOM_WAITING:
                 self._handle_room_waiting_events(event)
+            elif self.ui_state == UIState.ABOUT:
+                self._handle_about_events(event)
     
     def _handle_main_menu_events(self, event):
         """Handle main menu events"""
@@ -362,7 +597,9 @@ class GomokuUI:
                     self._load_game()
                 elif i == 2:  # Settings
                     self.ui_state = UIState.SETTINGS
-                elif i == 3:  # Quit
+                elif i == 3:  # About
+                    self.ui_state = UIState.ABOUT
+                elif i == 4:  # Quit
                     self.running = False
     
     def _handle_game_mode_events(self, event):
@@ -376,7 +613,8 @@ class GomokuUI:
                     self._start_new_game()
                 elif i == 1:  # Player vs AI
                     self.game_mode = GameMode.AI_GAME
-                    self.ui_state = UIState.AI_DIFFICULTY_SELECT
+                    self.num_ai_players = 2  # Reset to default
+                    self.ui_state = UIState.AI_PLAYER_COUNT_SELECT
                 elif i == 2:  # Network Game
                     self.game_mode = GameMode.NETWORK_GAME
                     self.ui_state = UIState.SERVER_SELECT
@@ -394,6 +632,21 @@ class GomokuUI:
                     self.ai_difficulty = difficulties[i]
                     self._start_new_game()
                 elif i == 4:  # Back
+                    if self.num_ai_players > 2:
+                        self.ui_state = UIState.AI_PLAYER_COUNT_SELECT
+                    else:
+                        self.ui_state = UIState.GAME_MODE_SELECT
+    
+    def _handle_ai_player_count_events(self, event):
+        """Handle AI player count selection events"""
+        buttons = self.buttons["ai_player_count"]
+        
+        for i, button in enumerate(buttons):
+            if button.handle_event(event):
+                if i < 4:  # Player count selection (2, 3, 4, 5)
+                    self.num_ai_players = i + 2  # 2, 3, 4, or 5 players
+                    self.ui_state = UIState.AI_DIFFICULTY_SELECT
+                elif i == 4:  # Back
                     self.ui_state = UIState.GAME_MODE_SELECT
     
     def _handle_network_setup_events(self, event):
@@ -409,6 +662,12 @@ class GomokuUI:
     
     def _handle_gameplay_events(self, event):
         """Handle gameplay events"""
+        # Handle keyboard shortcuts
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_d:  # Toggle AI debug view
+                self.ai_debug_enabled = not self.ai_debug_enabled
+                print(f"🔍 AI Debug View: {'ON' if self.ai_debug_enabled else 'OFF'}")
+        
         buttons = self.buttons["gameplay"]
 
         # Handle button clicks (require actual click on the button)
@@ -474,6 +733,9 @@ class GomokuUI:
                     self.turn_start_time = time.time()
 
                     self.ui_state = UIState.GAMEPLAY
+                    
+                    # Play board start sound when resuming
+                    self._play_sound("board_start")
 
                     # Notify opponent when resuming
                     if self.is_network_game and self.network_manager:
@@ -491,6 +753,11 @@ class GomokuUI:
         """Handle game over events"""
         buttons = self.buttons["game_over"]
         
+        # Ensure buttons are enabled
+        for button in buttons:
+            button.enabled = True
+        
+        # Handle button clicks
         for i, button in enumerate(buttons):
             if button.handle_event(event):
                 if i == 0:  # New Game
@@ -500,12 +767,17 @@ class GomokuUI:
                     else:
                         # Local games can start immediately
                         self._start_new_game()
+                    return  # Exit after handling
                 elif i == 1:  # Main Menu
                     if self.is_network_game:
+                        # Leave the room (other player will be notified and moved to waiting screen)
+                        if self.network_manager:
+                            self.network_manager.leave_room()
                         # Disconnect from network and return to main menu
                         self._return_to_main_menu()
                     else:
                         self.ui_state = UIState.MAIN_MENU
+                    return  # Exit after handling
     
     def _handle_settings_events(self, event):
         """Handle settings events"""
@@ -514,17 +786,21 @@ class GomokuUI:
         for i, button in enumerate(buttons):
             if button.handle_event(event):
                 if i == 0:  # Sound toggle
-                    # Toggle sound setting (placeholder)
-                    if "On" in button.text:
-                        button.text = "Sound: Off"
-                    else:
+                    # Toggle sound setting
+                    self.sounds_enabled = not self.sounds_enabled
+                    if self.sounds_enabled:
                         button.text = "Sound: On"
-                elif i == 1:  # Music toggle
-                    # Toggle music setting (placeholder)
-                    if "On" in button.text:
-                        button.text = "Music: Off"
                     else:
+                        button.text = "Sound: Off"
+                elif i == 1:  # Music toggle
+                    # Toggle music setting
+                    self.music_enabled = not self.music_enabled
+                    if self.music_enabled:
                         button.text = "Music: On"
+                        self._play_background_music()
+                    else:
+                        button.text = "Music: Off"
+                        self._stop_background_music()
                 elif i == 2:  # Show coordinates toggle
                     # Toggle coordinates setting (placeholder)
                     if "Off" in button.text:
@@ -627,6 +903,11 @@ class GomokuUI:
         if self.ui_state == UIState.GAME_MODE_SELECT:
             self.ui_state = UIState.MAIN_MENU
         elif self.ui_state == UIState.AI_DIFFICULTY_SELECT:
+            if self.num_ai_players > 2:
+                self.ui_state = UIState.AI_PLAYER_COUNT_SELECT
+            else:
+                self.ui_state = UIState.GAME_MODE_SELECT
+        elif self.ui_state == UIState.AI_PLAYER_COUNT_SELECT:
             self.ui_state = UIState.GAME_MODE_SELECT
         elif self.ui_state == UIState.PLAYER_NAME_INPUT:
             self.ui_state = UIState.SERVER_SELECT
@@ -643,6 +924,8 @@ class GomokuUI:
         elif self.ui_state == UIState.PAUSE_MENU:
             self.ui_state = UIState.GAMEPLAY
         elif self.ui_state == UIState.SETTINGS:
+            self.ui_state = UIState.MAIN_MENU
+        elif self.ui_state == UIState.ABOUT:
             self.ui_state = UIState.MAIN_MENU
     
     def _cleanup_and_quit(self):
@@ -693,34 +976,82 @@ class GomokuUI:
                 elapsed = self.elapsed_before_pause  # frozen time during pause
 
             if elapsed > self.move_time_limit:
-                print(f"⏰ Player {self.game.current_player.name} exceeded 20 s — auto-resign.")
-                self._resign_game()
+                print(f"⏰ Player {self.game.current_player.name} exceeded 30 s — auto-resign.")
+                # For network games, make sure we're resigning the correct player
+                if self.is_network_game:
+                    # In network games, only timeout if it's our turn
+                    if self.game.current_player == self.my_player:
+                        self._resign_game()
+                    else:
+                        # It's opponent's turn - they should timeout on their side
+                        # But if they don't respond, we might need server-side timeout
+                        print(f"⏰ Waiting for opponent {self.game.current_player.name} to timeout...")
+                else:
+                    # Local game - resign current player (they lose)
+                    self._resign_game()
                 self.turn_start_time = None
                 self.elapsed_before_pause = 0
                 return
         if self.ui_state == UIState.GAMEPLAY:
-            # Handle AI moves
+            # Handle AI moves (for single or multiple AI players)
             if (self.game_mode == GameMode.AI_GAME and 
                 self.game.current_player != Player.BLACK and 
-                self.game.game_state == GameState.PLAYING and
-                self.ai_player):
+                self.game.game_state == GameState.PLAYING):
                 
-                # Start AI thinking if not already started
-                if not self.ai_thinking and (self.ai_thread is None or not self.ai_thread.is_alive()):
-                    self._start_ai_thinking()
+                # Get the AI player for current player
+                current_ai = self.ai_players.get(self.game.current_player)
+                if not current_ai and self.ai_player and self.game.current_player == Player.WHITE:
+                    current_ai = self.ai_player  # Fallback for backward compatibility
                 
-                # Check if AI has finished thinking
-                elif self.ai_thinking and self.ai_move_result is not None:
-                    move = self.ai_move_result
-                    self.ai_move_result = None
-                    self.ai_thinking = False
+                if current_ai:
+                    # Start AI thinking if not already started
+                    if not self.ai_thinking and (self.ai_thread is None or not self.ai_thread.is_alive()):
+                        self._start_ai_thinking(current_ai)
                     
-                    if move:
-                        self._make_move(move[0], move[1])
+                    # Check if AI has finished thinking
+                    elif self.ai_thinking and self.ai_move_result is not None:
+                        move = self.ai_move_result
+                        self.ai_move_result = None
+                        self.ai_thinking = False
+                        
+                        # Store AI debug statistics
+                        if current_ai:
+                            self.ai_debug_stats = current_ai.get_statistics()
+                            # Print debug info to console
+                            if self.ai_debug_stats:
+                                print("\n" + "="*60)
+                                print(f"🔍 AI DEBUG STATISTICS ({self.game.current_player.name})")
+                                print("="*60)
+                                print(f"Nodes Evaluated: {self.ai_debug_stats['nodes_evaluated']}")
+                                print(f"Pruning Count: {self.ai_debug_stats['pruning_count']}")
+                                print(f"Pruning Efficiency: {self.ai_debug_stats['pruning_efficiency']:.2f}%")
+                                print(f"Max Depth Reached: {self.ai_debug_stats['max_depth_reached']}")
+                                print(f"Search Time: {self.ai_debug_stats['search_time']:.3f}s")
+                                print(f"Nodes/Second: {self.ai_debug_stats['nodes_per_second']:.0f}")
+                                if self.ai_debug_stats['nodes_by_depth']:
+                                    print("\nNodes by Depth:")
+                                    for depth, count in sorted(self.ai_debug_stats['nodes_by_depth'].items()):
+                                        print(f"  Depth {depth}: {count} nodes")
+                                if self.ai_debug_stats['move_evaluations']:
+                                    print("\nTop Move Evaluations:")
+                                    sorted_moves = sorted(self.ai_debug_stats['move_evaluations'], 
+                                                        key=lambda x: x['score'], reverse=True)
+                                    for i, eval_info in enumerate(sorted_moves[:5]):  # Show top 5
+                                        move_info = eval_info['move']
+                                        print(f"  {i+1}. Move ({move_info[0]}, {move_info[1]}): Score={eval_info['score']:.1f}, "
+                                              f"Alpha={eval_info['alpha']:.1f}, Beta={eval_info['beta']:.1f}")
+                                print("="*60 + "\n")
+                        
+                        if move:
+                            self._make_move(move[0], move[1])
             
             # Check for game over
             if self.game.game_state != GameState.PLAYING:
-                self.ui_state = UIState.GAME_OVER
+                if self.ui_state == UIState.GAMEPLAY:  # Only transition once
+                    self.ui_state = UIState.GAME_OVER
+                    # Play winner sound when game ends
+                    if self.game.game_state in [GameState.BLACK_WINS, GameState.WHITE_WINS]:
+                        self._play_sound("winner")
         # While paused, auto-resume after per-pause limit (no cumulative depletion)
         if self.paused and self.pause_start_time:
             elapsed_pause = time.time() - self.pause_start_time
@@ -735,8 +1066,14 @@ class GomokuUI:
                 self.turn_start_time = time.time()
     
     def _draw(self):
-        """Draw the current UI state"""
-        self.screen.fill(Colors.BACKGROUND)
+        """Draw the current UI state with modern effects"""
+        # Determine which background to use
+        if self.ui_state == UIState.GAMEPLAY or self.ui_state == UIState.PAUSE_MENU or self.ui_state == UIState.GAME_OVER:
+            # Use game background during gameplay
+            self._draw_gradient_background(use_image="game")
+        else:
+            # Use start background for menus
+            self._draw_gradient_background(use_image="start")
         
         if self.ui_state == UIState.MAIN_MENU:
             self._draw_main_menu()
@@ -744,6 +1081,8 @@ class GomokuUI:
             self._draw_game_mode_select()
         elif self.ui_state == UIState.AI_DIFFICULTY_SELECT:
             self._draw_ai_difficulty_select()
+        elif self.ui_state == UIState.AI_PLAYER_COUNT_SELECT:
+            self._draw_ai_player_count_select()
         elif self.ui_state == UIState.GAMEPLAY:
             self._draw_gameplay()
         elif self.ui_state == UIState.PAUSE_MENU:
@@ -752,6 +1091,8 @@ class GomokuUI:
             self._draw_game_over()
         elif self.ui_state == UIState.SETTINGS:
             self._draw_settings()
+        elif self.ui_state == UIState.ABOUT:
+            self._draw_about()
         elif self.ui_state == UIState.PLAYER_NAME_INPUT:
             self._draw_player_name_input()
         elif self.ui_state == UIState.SERVER_SELECT:
@@ -782,49 +1123,129 @@ class GomokuUI:
                 color = Colors.ERROR
 
             # === 1️⃣ Main move timer ===
-            timer_rect = pygame.Rect(self.WINDOW_WIDTH - 180, 20, 130, 45)
-            pygame.draw.rect(self.screen, Colors.BACKGROUND, timer_rect)   # flat background
-            pygame.draw.rect(self.screen, color, timer_rect, 2)       # no radius
+            timer_rect = pygame.Rect(self.WINDOW_WIDTH - 180, 20, 130, 50)  # Increased height
+            # Background panel for better visibility
+            timer_bg = pygame.Surface((timer_rect.width, timer_rect.height))
+            timer_bg.set_alpha(240)
+            timer_bg.fill((20, 20, 30))  # Dark background
+            self.screen.blit(timer_bg, timer_rect)
+            pygame.draw.rect(self.screen, color, timer_rect, 3)  # Thicker border
+            # Text with shadow
+            timer_shadow = self.font_medium.render(f"{remaining:02d}s", True, (0, 0, 0))
+            timer_shadow_rect = timer_shadow.get_rect(center=(timer_rect.centerx + 1, timer_rect.centery + 1))
+            self.screen.blit(timer_shadow, timer_shadow_rect)
             timer_text = self.font_medium.render(f"{remaining:02d}s", True, color)
             self.screen.blit(timer_text, timer_text.get_rect(center=timer_rect.center))
 
             # === 2️⃣ Pause info boxes (below main timer) ===
             y = 10
-            box_width = 200
-            box_height = 36
-            for player in [Player.BLACK, Player.WHITE]:
-                label = self.player_names[player]
+            box_width = 220  # Increased width
+            box_height = 42  # Increased height
+            
+            # Get all players in the game
+            if hasattr(self.game, 'players') and self.game.players:
+                all_players = self.game.players
+            else:
+                # Fallback for 2-player games
+                all_players = [Player.BLACK, Player.WHITE]
+            
+            for player in all_players:
+                # Skip if player doesn't have pause allowance (shouldn't happen, but safety check)
+                if player not in self.pause_allowance:
+                    continue
+                    
+                label = self.player_names.get(player, f"Player {player.name}")
                 pauses_left = self.pause_allowance[player]
                 pause_time = self.per_pause_limit  # constant per pause, not a running pool
 
                 pause_rect = pygame.Rect(20, y, box_width, box_height)
-                pygame.draw.rect(self.screen, Colors.BACKGROUND, pause_rect)
-                pygame.draw.rect(self.screen, Colors.TEXT_SECONDARY, pause_rect, 2)
+                # Background panel for better visibility
+                pause_bg = pygame.Surface((pause_rect.width, pause_rect.height))
+                pause_bg.set_alpha(240)
+                pause_bg.fill((20, 20, 30))  # Dark background
+                self.screen.blit(pause_bg, pause_rect)
+                
+                # Highlight current player's box with colored border
+                if self.game.current_player == player:
+                    pygame.draw.rect(self.screen, Colors.SUCCESS, pause_rect, 3)  # Green border for current player
+                else:
+                    pygame.draw.rect(self.screen, Colors.WHITE, pause_rect, 2)  # White border for others
 
                 pause_text = f"{label}: {pauses_left}× {pause_time}s"
-                text_surface = self.font_small.render(pause_text, True, Colors.TEXT_SECONDARY)
+                # Text with shadow
+                text_shadow = self.font_info.render(pause_text, True, (0, 0, 0))
+                text_shadow_rect = text_shadow.get_rect(center=(pause_rect.centerx + 1, pause_rect.centery + 1))
+                self.screen.blit(text_shadow, text_shadow_rect)
+                
+                # Highlight current player's text
+                text_color = Colors.SUCCESS if self.game.current_player == player else Colors.WHITE
+                text_surface = self.font_info.render(pause_text, True, text_color)
                 self.screen.blit(text_surface, text_surface.get_rect(center=pause_rect.center))
                 y += box_height + 8
         pygame.display.flip()
     
     def _draw_main_menu(self):
-        """Draw main menu"""
-        # Title (centered for 800px width)
-        title = self.font_large.render("GOMOKU", True, Colors.TEXT_PRIMARY)
+        """Draw main menu with modern effects"""
+        # Enhanced title with multiple shadow layers for depth
+        title_text = "GOMOKU"
+        
+        # Multiple shadow layers for 3D effect
+        for offset in [(3, 3), (2, 2), (1, 1)]:
+            title_shadow = self.font_large.render(title_text, True, (0, 0, 0))
+            title_shadow_rect = title_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + offset[0], 100 + offset[1]))
+            shadow_surf = pygame.Surface(title_shadow.get_size())
+            shadow_surf.set_alpha(40 // offset[0])
+            shadow_surf.fill((0, 0, 0))
+            self.screen.blit(title_shadow, title_shadow_rect)
+        
+        # Main title with gradient-like effect (brighter)
+        title = self.font_large.render(title_text, True, Colors.WHITE)
         title_rect = title.get_rect(center=(self.WINDOW_WIDTH // 2, 100))
         self.screen.blit(title, title_rect)
         
-        subtitle = self.font_medium.render("Five in a Row", True, Colors.TEXT_SECONDARY)
+        # Glow effect around title
+        glow_surf = pygame.Surface((title_rect.width + 20, title_rect.height + 20))
+        glow_surf.set_alpha(30)
+        glow_surf.fill(Colors.ACCENT)
+        glow_rect = glow_surf.get_rect(center=title_rect.center)
+        self.screen.blit(glow_surf, glow_rect)
+        
+        # Subtitle with modern styling and shadow
+        subtitle_shadow = self.font_medium.render("Five in a Row", True, (0, 0, 0))
+        subtitle_shadow_rect = subtitle_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + 1, 141))
+        self.screen.blit(subtitle_shadow, subtitle_shadow_rect)
+        
+        subtitle = self.font_medium.render("Five in a Row", True, Colors.WHITE)
         subtitle_rect = subtitle.get_rect(center=(self.WINDOW_WIDTH // 2, 140))
         self.screen.blit(subtitle, subtitle_rect)
         
-        # Buttons
+        # Enhanced decorative line with glow
+        line_y = 155
+        # Glow line
+        for i in range(3):
+            alpha = 20 - i * 5
+            glow_line = pygame.Surface((200, 3))
+            glow_line.set_alpha(alpha)
+            glow_line.fill(Colors.ACCENT)
+            self.screen.blit(glow_line, (self.WINDOW_WIDTH // 2 - 100, line_y - 1 + i))
+        # Main line
+        pygame.draw.line(self.screen, Colors.ACCENT, 
+                        (self.WINDOW_WIDTH // 2 - 100, line_y),
+                        (self.WINDOW_WIDTH // 2 + 100, line_y), 3)
+        
+        # Buttons with modern effects
         for button in self.buttons["main_menu"]:
             button.draw(self.screen)
     
     def _draw_game_mode_select(self):
-        """Draw game mode selection"""
-        title = self.font_large.render("Select Game Mode", True, Colors.TEXT_PRIMARY)
+        """Draw game mode selection with enhanced visibility"""
+        # Title with shadow and better contrast
+        title_text = "Select Game Mode"
+        title_shadow = self.font_large.render(title_text, True, (0, 0, 0))
+        title_shadow_rect = title_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + 2, 102))
+        self.screen.blit(title_shadow, title_shadow_rect)
+        
+        title = self.font_large.render(title_text, True, Colors.WHITE)
         title_rect = title.get_rect(center=(self.WINDOW_WIDTH // 2, 100))
         self.screen.blit(title, title_rect)
         
@@ -832,12 +1253,43 @@ class GomokuUI:
             button.draw(self.screen)
     
     def _draw_ai_difficulty_select(self):
-        """Draw AI difficulty selection"""
-        title = self.font_large.render("Select AI Difficulty", True, Colors.TEXT_PRIMARY)
+        """Draw AI difficulty selection with enhanced visibility"""
+        # Title with shadow and better contrast
+        title_text = "Select AI Difficulty"
+        title_shadow = self.font_large.render(title_text, True, (0, 0, 0))
+        title_shadow_rect = title_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + 2, 102))
+        self.screen.blit(title_shadow, title_shadow_rect)
+        
+        title = self.font_large.render(title_text, True, Colors.WHITE)
         title_rect = title.get_rect(center=(self.WINDOW_WIDTH // 2, 100))
         self.screen.blit(title, title_rect)
         
         for button in self.buttons["ai_difficulty"]:
+            button.draw(self.screen)
+    
+    def _draw_ai_player_count_select(self):
+        """Draw AI player count selection screen"""
+        # Title with shadow and better contrast
+        title_text = "Select Number of Players"
+        title_shadow = self.font_large.render(title_text, True, (0, 0, 0))
+        title_shadow_rect = title_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + 2, 102))
+        self.screen.blit(title_shadow, title_shadow_rect)
+        
+        title = self.font_large.render(title_text, True, Colors.WHITE)
+        title_rect = title.get_rect(center=(self.WINDOW_WIDTH // 2, 100))
+        self.screen.blit(title, title_rect)
+        
+        # Subtitle
+        subtitle_text = "You will be Player 1 (Black). Others will be AI opponents."
+        subtitle_shadow = self.font_small.render(subtitle_text, True, (0, 0, 0))
+        subtitle_shadow_rect = subtitle_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + 1, 151))
+        self.screen.blit(subtitle_shadow, subtitle_shadow_rect)
+        
+        subtitle = self.font_small.render(subtitle_text, True, Colors.WHITE)
+        subtitle_rect = subtitle.get_rect(center=(self.WINDOW_WIDTH // 2, 150))
+        self.screen.blit(subtitle, subtitle_rect)
+        
+        for button in self.buttons["ai_player_count"]:
             button.draw(self.screen)
     
     
@@ -848,6 +1300,10 @@ class GomokuUI:
         
         # Draw game info
         self._draw_game_info()
+        
+        # Draw AI debug panel if enabled
+        if self.ai_debug_enabled and self.game_mode == GameMode.AI_GAME:
+            self._draw_ai_debug_panel()
         
         # Draw buttons
         for button in self.buttons["gameplay"]:
@@ -901,7 +1357,11 @@ class GomokuUI:
         self.screen.blit(overlay, (0, 0))
         
         # Draw game over message with player names
-        if self.game.game_state == GameState.BLACK_WINS:
+        if self.game.winner:
+            winner_name = self.player_names.get(self.game.winner, self.game.winner.name)
+            message = f"{winner_name} WINS!"
+            color = Colors.WHITE
+        elif self.game.game_state == GameState.BLACK_WINS:
             winner_name = self.player_names.get(Player.BLACK, "Black")
             message = f"{winner_name} WINS!"
             color = Colors.WHITE
@@ -917,22 +1377,113 @@ class GomokuUI:
         title_rect = title.get_rect(center=(self.WINDOW_WIDTH // 2, 200))
         self.screen.blit(title, title_rect)
         
+        # Draw buttons (ensure they're enabled and visible)
         for button in self.buttons["game_over"]:
+            button.enabled = True
             button.draw(self.screen)
     
     def _draw_settings(self):
-        """Draw settings menu"""
-        title = self.font_large.render("Settings", True, Colors.BLACK)
+        """Draw settings menu with enhanced visibility"""
+        # Title with shadow and better contrast
+        title_text = "Settings"
+        title_shadow = self.font_large.render(title_text, True, (0, 0, 0))
+        title_shadow_rect = title_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + 2, 102))
+        self.screen.blit(title_shadow, title_shadow_rect)
+        
+        title = self.font_large.render(title_text, True, Colors.WHITE)
         title_rect = title.get_rect(center=(self.WINDOW_WIDTH // 2, 100))
         self.screen.blit(title, title_rect)
         
-        # Instructions
-        instruction = self.font_small.render("Click buttons to toggle settings", True, Colors.GRAY)
+        # Instructions with shadow
+        instruction_text = "Click buttons to toggle settings"
+        instruction_shadow = self.font_small.render(instruction_text, True, (0, 0, 0))
+        instruction_shadow_rect = instruction_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + 1, 151))
+        self.screen.blit(instruction_shadow, instruction_shadow_rect)
+        
+        instruction = self.font_small.render(instruction_text, True, Colors.WHITE)
         instruction_rect = instruction.get_rect(center=(self.WINDOW_WIDTH // 2, 150))
         self.screen.blit(instruction, instruction_rect)
         
         for button in self.buttons["settings"]:
             button.draw(self.screen)
+    
+    def _draw_about(self):
+        """Draw about page with team members and game info"""
+        # Title with shadow
+        title_text = "About Gomoku"
+        title_shadow = self.font_large.render(title_text, True, (0, 0, 0))
+        title_shadow_rect = title_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + 2, 52))
+        self.screen.blit(title_shadow, title_shadow_rect)
+        
+        title = self.font_large.render(title_text, True, Colors.WHITE)
+        title_rect = title.get_rect(center=(self.WINDOW_WIDTH // 2, 50))
+        self.screen.blit(title, title_rect)
+        
+        y_offset = 100
+        
+        # Team Members Section
+        team_title = self.font_medium.render("Team Members - Group 6", True, Colors.ACCENT)
+        team_title_shadow = self.font_medium.render("Team Members - Group 6", True, (0, 0, 0))
+        team_title_shadow_rect = team_title_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + 1, y_offset + 1))
+        self.screen.blit(team_title_shadow, team_title_shadow_rect)
+        team_title_rect = team_title.get_rect(center=(self.WINDOW_WIDTH // 2, y_offset))
+        self.screen.blit(team_title, team_title_rect)
+        y_offset += 40
+        
+        # Team members list
+        team_members = [
+            ("Nguyen Ngoc Khoi", "2252378"),
+            ("Nguyen Quang Phu", "2252621"),
+            ("Nguyen Tan Bao Le", "2252428"),
+            ("Nguyen Minh Khoi", "2252377")
+        ]
+        
+        for name, student_id in team_members:
+            member_text = f"{name} - {student_id}"
+            member_shadow = self.font_small.render(member_text, True, (0, 0, 0))
+            self.screen.blit(member_shadow, (self.WINDOW_WIDTH // 2 - 150 + 1, y_offset + 1))
+            member_surf = self.font_small.render(member_text, True, Colors.WHITE)
+            self.screen.blit(member_surf, (self.WINDOW_WIDTH // 2 - 150, y_offset))
+            y_offset += 30
+        
+        y_offset += 20
+        
+        # Game Controls Section
+        controls_title = self.font_medium.render("Game Controls", True, Colors.ACCENT)
+        controls_title_shadow = self.font_medium.render("Game Controls", True, (0, 0, 0))
+        controls_title_shadow_rect = controls_title_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + 1, y_offset + 1))
+        self.screen.blit(controls_title_shadow, controls_title_shadow_rect)
+        controls_title_rect = controls_title.get_rect(center=(self.WINDOW_WIDTH // 2, y_offset))
+        self.screen.blit(controls_title, controls_title_rect)
+        y_offset += 40
+        
+        controls = [
+            "Mouse Click: Place stone on board",
+            "ESC: Pause game",
+            "D: Toggle AI debug viewer (AI games)",
+            "Pause Button: Pause and access menu",
+            "Resign Button: Forfeit current game"
+        ]
+        
+        for control in controls:
+            control_shadow = self.font_small.render(control, True, (0, 0, 0))
+            self.screen.blit(control_shadow, (self.WINDOW_WIDTH // 2 - 200 + 1, y_offset + 1))
+            control_surf = self.font_small.render(control, True, Colors.WHITE)
+            self.screen.blit(control_surf, (self.WINDOW_WIDTH // 2 - 200, y_offset))
+            y_offset += 25
+        
+        # Buttons
+        for button in self.buttons["about"]:
+            button.draw(self.screen)
+    
+    def _handle_about_events(self, event):
+        """Handle about page events"""
+        buttons = self.buttons["about"]
+        
+        for i, button in enumerate(buttons):
+            if button.handle_event(event):
+                if i == 0:  # Back
+                    self.ui_state = UIState.MAIN_MENU
     
     def _draw_player_name_input(self):
         """Draw player name input screen"""
@@ -976,44 +1527,72 @@ class GomokuUI:
             button.draw(self.screen)
     
     def _draw_server_select(self):
-        """Draw server selection screen"""
-        title = self.font_large.render("Select Server", True, Colors.TEXT_PRIMARY)
+        """Draw server selection screen with improved visibility"""
+        # Title with shadow and better contrast
+        title_text = "Select Server"
+        title_shadow = self.font_large.render(title_text, True, (0, 0, 0))
+        title_shadow_rect = title_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + 2, 52))
+        self.screen.blit(title_shadow, title_shadow_rect)
+        
+        title = self.font_large.render(title_text, True, Colors.WHITE)
         title_rect = title.get_rect(center=(self.WINDOW_WIDTH // 2, 50))
         self.screen.blit(title, title_rect)
         
-        # Current server info
+        # Current server info with better visibility
         current_config = self.server_config_manager.get_current_config()
         if current_config:
             current_text = f"Current: {current_config.name}"
-            current_surface = self.font_medium.render(current_text, True, Colors.TEXT_SECONDARY)
+            current_shadow = self.font_info.render(current_text, True, (0, 0, 0))
+            current_shadow_rect = current_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + 1, 91))
+            self.screen.blit(current_shadow, current_shadow_rect)
+            
+            current_surface = self.font_info.render(current_text, True, Colors.ACCENT)
             current_rect = current_surface.get_rect(center=(self.WINDOW_WIDTH // 2, 90))
             self.screen.blit(current_surface, current_rect)
         
-        # Server list
+        # Server list with improved visibility
         configs = self.server_config_manager.get_all_configs()
         start_y = 130
         
         for i, (name, config) in enumerate(configs.items()):
-            y_pos = start_y + i * 60
+            y_pos = start_y + i * 70
             
-            # Server name and type
+            # Background panel for better readability
+            panel_rect = pygame.Rect(80, y_pos - 5, 640, 65)
+            panel = pygame.Surface((panel_rect.width, panel_rect.height))
+            panel.set_alpha(180)
+            panel.fill((20, 20, 30))
+            self.screen.blit(panel, panel_rect)
+            
+            # Border for selected server
+            if name == self.server_config_manager.current_config:
+                pygame.draw.rect(self.screen, Colors.SUCCESS, panel_rect, 3)
+            
+            # Server name and type - larger font, bright white
             server_text = f"{name} ({config.server_type.value})"
-            server_surface = self.font_small.render(server_text, True, Colors.TEXT_PRIMARY)
+            server_shadow = self.font_info.render(server_text, True, (0, 0, 0))
+            self.screen.blit(server_shadow, (100 + 1, y_pos + 1))
+            server_surface = self.font_info.render(server_text, True, Colors.WHITE)
             self.screen.blit(server_surface, (100, y_pos))
             
-            # Server details
+            # Server details - larger font, bright cyan/white
             details_text = f"{config.host}:{config.port}"
             if config.use_ssl:
                 details_text += " (SSL)"
-            details_surface = self.font_small.render(details_text, True, Colors.TEXT_SECONDARY)
-            self.screen.blit(details_surface, (100, y_pos + 20))
+            details_shadow = self.font_small.render(details_text, True, (0, 0, 0))
+            self.screen.blit(details_shadow, (100 + 1, y_pos + 28))
+            details_surface = self.font_small.render(details_text, True, (200, 255, 255))  # Bright cyan
+            self.screen.blit(details_surface, (100, y_pos + 27))
             
-            # Current indicator
+            # Current indicator - larger and more visible
             if name == self.server_config_manager.current_config:
-                indicator = self.font_small.render("← CURRENT", True, Colors.SUCCESS)
-                self.screen.blit(indicator, (500, y_pos + 10))
+                indicator_text = "CURRENT"
+                indicator_shadow = self.font_info.render(indicator_text, True, (0, 0, 0))
+                self.screen.blit(indicator_shadow, (550 + 1, y_pos + 15))
+                indicator = self.font_info.render(indicator_text, True, Colors.SUCCESS)
+                self.screen.blit(indicator, (550, y_pos + 14))
         
-        # Instructions
+        # Instructions with better visibility
         instructions = [
             "Click on a server to select it",
             "Press Enter to continue with selected server",
@@ -1021,8 +1600,12 @@ class GomokuUI:
         ]
         
         for i, instruction in enumerate(instructions):
-            text = self.font_small.render(instruction, True, Colors.TEXT_SECONDARY)
-            text_rect = text.get_rect(center=(self.WINDOW_WIDTH // 2, 450 + i * 20))
+            text_shadow = self.font_small.render(instruction, True, (0, 0, 0))
+            text_shadow_rect = text_shadow.get_rect(center=(self.WINDOW_WIDTH // 2 + 1, 450 + i * 22 + 1))
+            self.screen.blit(text_shadow, text_shadow_rect)
+            
+            text = self.font_small.render(instruction, True, Colors.WHITE)
+            text_rect = text.get_rect(center=(self.WINDOW_WIDTH // 2, 450 + i * 22))
             self.screen.blit(text, text_rect)
         
         # Buttons
@@ -1176,11 +1759,24 @@ class GomokuUI:
             button.draw(self.screen)
     
     def _draw_board(self):
-        """Draw the game board"""
-        # Draw board background
+        """Draw the game board with modern effects"""
+        # Draw board background with shadow
         board_rect = pygame.Rect(self.BOARD_OFFSET_X, self.BOARD_OFFSET_Y, 
                                 self.BOARD_SIZE, self.BOARD_SIZE)
+        
+        # Shadow effect
+        shadow_rect = pygame.Rect(self.BOARD_OFFSET_X + 4, self.BOARD_OFFSET_Y + 4,
+                                 self.BOARD_SIZE, self.BOARD_SIZE)
+        shadow_surface = pygame.Surface((shadow_rect.width, shadow_rect.height))
+        shadow_surface.set_alpha(40)
+        shadow_surface.fill(Colors.BLACK)
+        self.screen.blit(shadow_surface, shadow_rect)
+        
+        # Board background with subtle gradient
         pygame.draw.rect(self.screen, Colors.LIGHT_BROWN, board_rect)
+        
+        # Add subtle border
+        pygame.draw.rect(self.screen, Colors.DARK_BROWN, board_rect, 3)
         
         # Draw grid lines
         for i in range(GomokuGame.BOARD_SIZE + 1):
@@ -1207,13 +1803,27 @@ class GomokuUI:
             self._highlight_last_move(self.last_move_pos[0], self.last_move_pos[1])
     
     def _draw_stone(self, row: int, col: int, player: Player):
-        """Draw a stone on the board"""
+        """Draw a stone on the board with color based on player"""
         center_x = self.BOARD_OFFSET_X + col * self.CELL_SIZE + self.CELL_SIZE // 2
         center_y = self.BOARD_OFFSET_Y + row * self.CELL_SIZE + self.CELL_SIZE // 2
         radius = self.CELL_SIZE // 2 - 3
         
-        color = Colors.BLACK if player == Player.BLACK else Colors.WHITE
-        border_color = Colors.WHITE if player == Player.BLACK else Colors.BLACK
+        # Get player color from mapping
+        player_colors = {
+            Player.BLACK: (0, 0, 0),           # Black
+            Player.WHITE: (255, 255, 255),    # White
+            Player.RED: (220, 38, 38),        # Red
+            Player.BLUE: (37, 99, 235),       # Blue
+            Player.GREEN: (34, 197, 94)       # Green
+        }
+        
+        color = player_colors.get(player, Colors.BLACK)
+        
+        # Border color: white for dark colors, black for light colors
+        if player == Player.WHITE:
+            border_color = Colors.BLACK
+        else:
+            border_color = Colors.WHITE
         
         pygame.draw.circle(self.screen, color, (center_x, center_y), radius)
         pygame.draw.circle(self.screen, border_color, (center_x, center_y), radius, 2)
@@ -1227,65 +1837,132 @@ class GomokuUI:
         pygame.draw.circle(self.screen, Colors.RED, (center_x, center_y), radius, 3)
     
     def _draw_game_info(self):
-        """Draw game information panel (adjusted for 800px width)"""
+        """Draw game information panel with enhanced visibility"""
         info_x = 520  # Adjusted for new board position
         info_y = 120  # Moved up to align with new board position
+        panel_width = 260
+        panel_padding = 15
         
-        # Player names
-        black_name = self.player_names.get(Player.BLACK, "Player 1")
-        white_name = self.player_names.get(Player.WHITE, "Player 2")
+        # Create semi-transparent background panel for better readability
+        # Adjust height based on number of players and debug panel
+        num_players = len(self.game.players) if hasattr(self.game, 'players') else 2
+        base_height = 80  # Base height for title and separator
+        player_section_height = num_players * 26  # 26px per player
+        moves_section_height = 50  # Moves and mode info
+        panel_height = base_height + player_section_height + moves_section_height
         
-        # Current player with name (highlighted)
+        # Add extra space if no debug panel in AI games
+        if self.game_mode == GameMode.AI_GAME and not self.ai_debug_enabled:
+            panel_height += 20
+        elif self.game_mode == GameMode.AI_GAME and self.ai_debug_enabled:
+            panel_height -= 20  # Less space if debug panel is shown
+        if self.is_network_game:
+            panel_height += 10
+        
+        info_panel = pygame.Surface((panel_width, panel_height))
+        info_panel.set_alpha(230)  # More opaque for better readability
+        info_panel.fill((20, 20, 30))  # Dark background
+        self.screen.blit(info_panel, (info_x - panel_padding, info_y - panel_padding))
+        
+        # Add border for modern look
+        border_rect = pygame.Rect(info_x - panel_padding, info_y - panel_padding, 
+                                 panel_width, panel_height)
+        pygame.draw.rect(self.screen, Colors.ACCENT, border_rect, 3)
+        
+        # Current player with name (highlighted) - larger font, brighter color
         current_player_name = self.player_names.get(self.game.current_player, "Unknown")
         current_text = f"Current Player: {current_player_name}"
-        current_surface = self.font_medium.render(current_text, True, Colors.TEXT_PRIMARY)
+        
+        # Text shadow for depth
+        current_shadow = self.font_info.render(current_text, True, (0, 0, 0))
+        self.screen.blit(current_shadow, (info_x + 1, info_y + 1))
+        
+        # Main text - bright white for visibility
+        current_surface = self.font_info.render(current_text, True, Colors.WHITE)
         self.screen.blit(current_surface, (info_x, info_y))
         
-        # Show both players with better network game indication
-        if self.is_network_game and hasattr(self, 'network_game_info'):
-            # In network games, highlight your own name differently
-            your_role = self.network_game_info.get('your_role', 'black')
-            
-            # Current player highlighting with modern colors
-            black_color = Colors.SUCCESS if self.game.current_player == Player.BLACK else Colors.TEXT_PRIMARY
-            white_color = Colors.SUCCESS if self.game.current_player == Player.WHITE else Colors.TEXT_PRIMARY
-            
-            # Add "YOU" indicator for network games
-            if your_role == 'black':
-                black_text = f"● {black_name} (YOU)"
-                white_text = f"○ {white_name}"
-            else:
-                black_text = f"● {black_name}"
-                white_text = f"○ {white_name} (YOU)"
+        # Add separator line after current player
+        separator_y = info_y + 32
+        pygame.draw.line(self.screen, Colors.ACCENT, 
+                        (info_x - 10, separator_y),
+                        (info_x + panel_width - 25, separator_y), 2)
+        
+        # Show all players in the game (supports 2-5 players)
+        player_y = info_y + 42
+        line_height = 26
+        
+        # Get all players in the game
+        if hasattr(self.game, 'players') and self.game.players:
+            all_players = self.game.players
         else:
-            # Local games - normal highlighting with modern colors
-            black_color = Colors.SUCCESS if self.game.current_player == Player.BLACK else Colors.TEXT_PRIMARY
-            white_color = Colors.SUCCESS if self.game.current_player == Player.WHITE else Colors.TEXT_PRIMARY
+            # Fallback for 2-player games
+            all_players = [Player.BLACK, Player.WHITE]
+        
+        # Player symbols/colors mapping
+        player_symbols = {
+            Player.BLACK: "●",
+            Player.WHITE: "○",
+            Player.RED: "◆",
+            Player.BLUE: "■",
+            Player.GREEN: "▲"
+        }
+        
+        # Show all players with current player highlighting
+        for i, player in enumerate(all_players):
+            player_name = self.player_names.get(player, f"Player {i+1}")
+            symbol = player_symbols.get(player, "●")
             
-            black_text = f"● {black_name}"
-            white_text = f"○ {white_name}"
+            # Highlight current player with green color
+            if self.game.current_player == player:
+                player_color = Colors.SUCCESS  # Green for current player
+                player_text = f"{symbol} {player_name} ←"
+            else:
+                player_color = Colors.WHITE
+                player_text = f"{symbol} {player_name}"
+            
+            # Add "(YOU)" indicator for human player in AI games
+            if self.game_mode == GameMode.AI_GAME and player == Player.BLACK:
+                player_text += " (YOU)"
+            
+            # Add "(YOU)" indicator for network games
+            if self.is_network_game and hasattr(self, 'network_game_info'):
+                your_role = self.network_game_info.get('your_role', 'black')
+                if (your_role == 'black' and player == Player.BLACK) or \
+                   (your_role == 'white' and player == Player.WHITE):
+                    player_text += " (YOU)"
+            
+            # Draw player info with shadows
+            player_shadow = self.font_info.render(player_text, True, (0, 0, 0))
+            self.screen.blit(player_shadow, (info_x + 1, player_y + 1))
+            player_surface = self.font_info.render(player_text, True, player_color)
+            self.screen.blit(player_surface, (info_x, player_y))
+            
+            player_y += line_height
         
-        black_surface = self.font_small.render(black_text, True, black_color)
-        white_surface = self.font_small.render(white_text, True, white_color)
-        
-        self.screen.blit(black_surface, (info_x, info_y + 35))
-        self.screen.blit(white_surface, (info_x, info_y + 55))
-        
-        # Move count
+        # Move count - positioned after all players
+        move_y = player_y + 10  # Add spacing after players
         move_text = f"Moves: {len(self.game.move_history)}"
-        move_surface = self.font_small.render(move_text, True, Colors.TEXT_SECONDARY)
-        self.screen.blit(move_surface, (info_x, info_y + 80))
+        move_shadow = self.font_info.render(move_text, True, (0, 0, 0))
+        self.screen.blit(move_shadow, (info_x + 1, move_y + 1))
+        move_surface = self.font_info.render(move_text, True, Colors.WHITE)
+        self.screen.blit(move_surface, (info_x, move_y))
         
-        # Game mode
+        # Game mode - positioned after move count
+        mode_y = move_y + 28
         mode_text = f"Mode: {self.game_mode.value.replace('_', ' ').title()}"
-        mode_surface = self.font_small.render(mode_text, True, Colors.TEXT_SECONDARY)
-        self.screen.blit(mode_surface, (info_x, info_y + 100))
+        mode_shadow = self.font_info.render(mode_text, True, (0, 0, 0))
+        self.screen.blit(mode_shadow, (info_x + 1, mode_y + 1))
+        mode_surface = self.font_info.render(mode_text, True, Colors.WHITE)
+        self.screen.blit(mode_surface, (info_x, mode_y))
         
-        # AI info
-        if self.game_mode == GameMode.AI_GAME and self.ai_player:
+        # AI info - only show if debug panel is not enabled
+        if self.game_mode == GameMode.AI_GAME and self.ai_player and not self.ai_debug_enabled:
+            ai_y = info_y + 160
             ai_text = f"AI Difficulty: {self.ai_difficulty.title()}"
-            ai_surface = self.font_small.render(ai_text, True, Colors.TEXT_SECONDARY)
-            self.screen.blit(ai_surface, (info_x, info_y + 120))
+            ai_shadow = self.font_info.render(ai_text, True, (0, 0, 0))
+            self.screen.blit(ai_shadow, (info_x + 1, ai_y + 1))
+            ai_surface = self.font_info.render(ai_text, True, Colors.WHITE)
+            self.screen.blit(ai_surface, (info_x, ai_y))
             
             # Show thinking animation
             if self.ai_thinking:
@@ -1295,17 +1972,21 @@ class GomokuUI:
                 
                 # Add a subtle pulsing effect
                 pulse = abs(math.sin(thinking_time * 3)) * 0.3 + 0.7
-                thinking_color = (int(0 * pulse), int(100 * pulse), int(255 * pulse))
-                thinking_surface = self.font_small.render(thinking_text, True, thinking_color)
-                self.screen.blit(thinking_surface, (info_x, info_y + 140))
+                thinking_color = (int(100 * pulse), int(200 * pulse), int(255 * pulse))
+                thinking_shadow = self.font_info.render(thinking_text, True, (0, 0, 0))
+                self.screen.blit(thinking_shadow, (info_x + 1, ai_y + 30))
+                thinking_surface = self.font_info.render(thinking_text, True, thinking_color)
+                self.screen.blit(thinking_surface, (info_x, ai_y + 29))
             else:
                 stats = self.ai_player.get_statistics()
                 if stats["nodes_evaluated"] > 0:
                     stats_text = f"AI Nodes: {stats['nodes_evaluated']}"
-                    stats_surface = self.font_small.render(stats_text, True, Colors.GRAY)
-                    self.screen.blit(stats_surface, (info_x, info_y + 140))
+                    stats_shadow = self.font_info.render(stats_text, True, (0, 0, 0))
+                    self.screen.blit(stats_shadow, (info_x + 1, ai_y + 30))
+                    stats_surface = self.font_info.render(stats_text, True, Colors.WHITE)
+                    self.screen.blit(stats_surface, (info_x, ai_y + 29))
         
-        # Network info (moved down to avoid overlap)
+        # Network info
         if self.is_network_game:
             if self.waiting_for_network:
                 network_text = "Waiting for opponent..."
@@ -1314,8 +1995,185 @@ class GomokuUI:
                 network_text = "Network Game Active"
                 color = Colors.SUCCESS
             
-            network_surface = self.font_small.render(network_text, True, color)
-            self.screen.blit(network_surface, (info_x, info_y + 160))  # Moved from +100 to +160
+            network_shadow = self.font_info.render(network_text, True, (0, 0, 0))
+            self.screen.blit(network_shadow, (info_x + 1, info_y + 215))
+            network_surface = self.font_info.render(network_text, True, color)
+            self.screen.blit(network_surface, (info_x, info_y + 214))
+    
+    def _draw_ai_debug_panel(self):
+        """Draw AI debug information panel with real-time thinking display"""
+        panel_x = 520
+        panel_y = 340  # Moved up slightly to avoid overlap
+        panel_width = 260
+        panel_height = 300  # Increased height for real-time moves
+        
+        # Background panel with padding
+        panel_padding = 15
+        debug_panel = pygame.Surface((panel_width, panel_height))
+        debug_panel.set_alpha(240)
+        debug_panel.fill((10, 10, 20))  # Very dark background
+        self.screen.blit(debug_panel, (panel_x - panel_padding, panel_y - panel_padding))
+        
+        # Border
+        border_rect = pygame.Rect(panel_x - panel_padding, panel_y - panel_padding, 
+                                 panel_width, panel_height)
+        pygame.draw.rect(self.screen, Colors.ACCENT, border_rect, 3)
+        
+        # Title with larger font
+        title_text = "AI Debug Info (Press D)"
+        title_shadow = self.font_info.render(title_text, True, (0, 0, 0))
+        self.screen.blit(title_shadow, (panel_x + 1, panel_y + 1))
+        title = self.font_info.render(title_text, True, Colors.ACCENT)
+        self.screen.blit(title, (panel_x, panel_y))
+        
+        y_offset = panel_y + 30  # More spacing
+        line_height = 20  # Line height for better readability
+        
+        # Use larger font for better readability
+        debug_font = self.font_small  # Use smaller font to fit more info
+        
+        # Get real-time stats if AI is thinking
+        real_time_stats = None
+        if self.ai_thinking and self.ai_player:
+            real_time_stats = self.ai_player.get_real_time_stats()
+        
+        # Show real-time thinking info if available
+        if real_time_stats and real_time_stats.get("is_thinking"):
+            # Current depth
+            depth_text = f"Depth: {real_time_stats.get('current_depth', 0)}"
+            depth_shadow = debug_font.render(depth_text, True, (0, 0, 0))
+            self.screen.blit(depth_shadow, (panel_x + 1, y_offset + 1))
+            depth_surf = debug_font.render(depth_text, True, Colors.WHITE)
+            self.screen.blit(depth_surf, (panel_x, y_offset))
+            y_offset += line_height
+            
+            # Nodes evaluated so far
+            nodes_text = f"Nodes: {real_time_stats.get('nodes_evaluated', 0)}"
+            nodes_shadow = debug_font.render(nodes_text, True, (0, 0, 0))
+            self.screen.blit(nodes_shadow, (panel_x + 1, y_offset + 1))
+            nodes_surf = debug_font.render(nodes_text, True, Colors.WHITE)
+            self.screen.blit(nodes_surf, (panel_x, y_offset))
+            y_offset += line_height
+            
+            # Best move so far
+            best_move = real_time_stats.get("best_move_so_far")
+            best_score = real_time_stats.get("best_score_so_far", float('-inf'))
+            if best_move is not None:
+                best_text = f"Best: ({best_move[0]},{best_move[1]})={best_score:.0f}"
+                best_shadow = debug_font.render(best_text, True, (0, 0, 0))
+                self.screen.blit(best_shadow, (panel_x + 1, y_offset + 1))
+                best_surf = debug_font.render(best_text, True, Colors.SUCCESS)
+                self.screen.blit(best_surf, (panel_x, y_offset))
+                y_offset += line_height + 5
+            
+            # Current moves being evaluated
+            current_moves = real_time_stats.get("current_moves", [])
+            if current_moves:
+                evaluating_text = "Evaluating Moves:"
+                eval_shadow = debug_font.render(evaluating_text, True, (0, 0, 0))
+                self.screen.blit(eval_shadow, (panel_x + 1, y_offset + 1))
+                eval_surf = debug_font.render(evaluating_text, True, Colors.ACCENT)
+                self.screen.blit(eval_surf, (panel_x, y_offset))
+                y_offset += line_height
+                
+                # Show top moves being evaluated (up to 5)
+                for i, move_info in enumerate(current_moves[:5]):
+                    move = move_info.get("move")
+                    status = move_info.get("status", "completed")
+                    score = move_info.get("score")
+                    
+                    if status == "evaluating":
+                        move_text = f"  → ({move[0]},{move[1]}) ..."
+                        move_color = Colors.WARNING
+                    else:
+                        if score is not None:
+                            move_text = f"  {i+1}. ({move[0]},{move[1]})={score:.0f}"
+                            move_color = Colors.SUCCESS if i == 0 else Colors.WHITE
+                        else:
+                            move_text = f"  {i+1}. ({move[0]},{move[1]})"
+                            move_color = Colors.WHITE
+                    
+                    move_shadow = debug_font.render(move_text, True, (0, 0, 0))
+                    self.screen.blit(move_shadow, (panel_x + 1, y_offset + 1))
+                    move_surf = debug_font.render(move_text, True, move_color)
+                    self.screen.blit(move_surf, (panel_x, y_offset))
+                    y_offset += line_height - 2
+        
+        # Show final stats if available (after thinking is done)
+        elif self.ai_debug_stats:
+            # Nodes evaluated
+            nodes_text = f"Nodes: {self.ai_debug_stats['nodes_evaluated']}"
+            nodes_shadow = debug_font.render(nodes_text, True, (0, 0, 0))
+            self.screen.blit(nodes_shadow, (panel_x + 1, y_offset + 1))
+            nodes_surf = debug_font.render(nodes_text, True, Colors.WHITE)
+            self.screen.blit(nodes_surf, (panel_x, y_offset))
+            y_offset += line_height
+            
+            # Pruning count
+            pruning_text = f"Prunings: {self.ai_debug_stats['pruning_count']}"
+            pruning_shadow = debug_font.render(pruning_text, True, (0, 0, 0))
+            self.screen.blit(pruning_shadow, (panel_x + 1, y_offset + 1))
+            pruning_surf = debug_font.render(pruning_text, True, Colors.SUCCESS)
+            self.screen.blit(pruning_surf, (panel_x, y_offset))
+            y_offset += line_height
+            
+            # Pruning efficiency
+            efficiency = self.ai_debug_stats.get('pruning_efficiency', 0)
+            eff_text = f"Efficiency: {efficiency:.1f}%"
+            eff_shadow = debug_font.render(eff_text, True, (0, 0, 0))
+            self.screen.blit(eff_shadow, (panel_x + 1, y_offset + 1))
+            eff_color = Colors.SUCCESS if efficiency > 20 else Colors.WARNING
+            eff_surf = debug_font.render(eff_text, True, eff_color)
+            self.screen.blit(eff_surf, (panel_x, y_offset))
+            y_offset += line_height
+            
+            # Max depth
+            depth_text = f"Max Depth: {self.ai_debug_stats.get('max_depth_reached', 0)}"
+            depth_shadow = debug_font.render(depth_text, True, (0, 0, 0))
+            self.screen.blit(depth_shadow, (panel_x + 1, y_offset + 1))
+            depth_surf = debug_font.render(depth_text, True, Colors.WHITE)
+            self.screen.blit(depth_surf, (panel_x, y_offset))
+            y_offset += line_height
+            
+            # Search time
+            time_text = f"Time: {self.ai_debug_stats.get('search_time', 0):.3f}s"
+            time_shadow = debug_font.render(time_text, True, (0, 0, 0))
+            self.screen.blit(time_shadow, (panel_x + 1, y_offset + 1))
+            time_surf = debug_font.render(time_text, True, Colors.WHITE)
+            self.screen.blit(time_surf, (panel_x, y_offset))
+            y_offset += line_height
+            
+            # Nodes per second
+            nps = self.ai_debug_stats.get('nodes_per_second', 0)
+            nps_text = f"Nodes/s: {nps:.0f}"
+            nps_shadow = debug_font.render(nps_text, True, (0, 0, 0))
+            self.screen.blit(nps_shadow, (panel_x + 1, y_offset + 1))
+            nps_surf = debug_font.render(nps_text, True, Colors.WHITE)
+            self.screen.blit(nps_surf, (panel_x, y_offset))
+            y_offset += line_height + 5
+            
+            # Top move evaluations with scores
+            move_evals = self.ai_debug_stats.get('move_evaluations', [])
+            if move_evals:
+                sorted_moves = sorted(move_evals, key=lambda x: x['score'], reverse=True)
+                top_moves_text = "Final Top Moves:"
+                top_shadow = debug_font.render(top_moves_text, True, (0, 0, 0))
+                self.screen.blit(top_shadow, (panel_x + 1, y_offset + 1))
+                top_surf = debug_font.render(top_moves_text, True, Colors.ACCENT)
+                self.screen.blit(top_surf, (panel_x, y_offset))
+                y_offset += line_height
+                
+                # Show top 5 moves with scores
+                for i, eval_info in enumerate(sorted_moves[:5]):
+                    move = eval_info['move']
+                    score = eval_info['score']
+                    move_text = f"{i+1}. ({move[0]},{move[1]}) Score: {score:.0f}"
+                    move_shadow = debug_font.render(move_text, True, (0, 0, 0))
+                    self.screen.blit(move_shadow, (panel_x + 1, y_offset + 1))
+                    move_color = Colors.SUCCESS if i == 0 else Colors.WHITE
+                    move_surf = debug_font.render(move_text, True, move_color)
+                    self.screen.blit(move_surf, (panel_x, y_offset))
+                    y_offset += line_height - 2
     
     def _get_board_position(self, mouse_pos: Tuple[int, int]) -> Optional[Tuple[int, int]]:
         """Convert mouse position to board coordinates"""
@@ -1358,6 +2216,14 @@ class GomokuUI:
             self.turn_start_time = time.time()  
             self.elapsed_before_pause = 0
             
+            # Play turn sound
+            self._play_sound("play_turn")
+            
+            # Check if game ended (winner)
+            if self.game.game_state != GameState.PLAYING:
+                if self.game.game_state in [GameState.BLACK_WINS, GameState.WHITE_WINS]:
+                    self._play_sound("winner")
+            
             # Send move over network if needed
             if self.is_network_game and self.network_manager:
                 player_id = self.game.move_history[-1].player.value
@@ -1374,6 +2240,15 @@ class GomokuUI:
                     # Reset turn timer after valid move
                     self.turn_start_time = time.time()
                     self.elapsed_before_pause = 0
+                    
+                    # Play turn sound
+                    self._play_sound("play_turn")
+                    
+                    # Check if game ended (winner)
+                    if self.game.game_state != GameState.PLAYING:
+                        if self.game.game_state in [GameState.BLACK_WINS, GameState.WHITE_WINS]:
+                            self._play_sound("winner")
+                    
                     print(f"Network move applied: ({row}, {col})")
                 else:
                     print(f"Failed to apply network move: ({row}, {col})")
@@ -1399,16 +2274,35 @@ class GomokuUI:
             # Thread will finish naturally since it's daemon
             pass
         
-        self.game.reset_game()
+        # Initialize game with correct number of players
+        if self.game_mode == GameMode.AI_GAME:
+            self.game = GomokuGame(num_players=self.num_ai_players)
+        else:
+            self.game.reset_game()
         self.last_move_pos = None
         
-        # Set player names based on game mode
+        # Set player names and AI players based on game mode
         if self.game_mode == GameMode.AI_GAME:
-            self.ai_player = AIPlayer(Player.WHITE, self.ai_difficulty)
+            # Create AI players for all non-human players
+            self.ai_players = {}
             self.player_names = {
-                Player.BLACK: "You",
-                Player.WHITE: f"AI ({self.ai_difficulty.title()})"
+                Player.BLACK: "You"
             }
+            
+            # Create AI for each non-human player
+            for i, player in enumerate(self.game.players[1:], 1):  # Skip BLACK (human)
+                self.ai_players[player] = AIPlayer(player, self.ai_difficulty)
+                player_color = player.name.title()
+                self.player_names[player] = f"AI {i} ({self.ai_difficulty.title()})"
+            
+            # For backward compatibility, keep ai_player for single AI games
+            if self.num_ai_players == 2:
+                self.ai_player = self.ai_players.get(Player.WHITE)
+            else:
+                self.ai_player = None  # Use ai_players dict instead
+            
+            # Initialize pause allowances for all players
+            self.pause_allowance = {player: 2 for player in self.game.players}
         elif self.game_mode == GameMode.LOCAL_PVP:
             self.ai_player = None
             self.player_names = {
@@ -1426,6 +2320,10 @@ class GomokuUI:
             self.ai_player = None
         
         self.ui_state = UIState.GAMEPLAY
+        
+        # Play board start sound and start background music (looping)
+        self._play_sound("board_start")
+        self._play_background_music()  # This will loop indefinitely
     
     
     def _save_game(self):
@@ -1485,6 +2383,11 @@ class GomokuUI:
                 self.last_move_pos = (last_move.row, last_move.col)
             
             self.ui_state = UIState.GAMEPLAY
+            
+            # Play board start sound and start background music when resuming
+            self._play_sound("board_start")
+            self._play_background_music()
+            
             print("Game loaded successfully!")
             
         except Exception as e:
@@ -1683,6 +2586,7 @@ class GomokuUI:
                 moves = data.get("moves", [])
                 current_player = data.get("current_player", 1)
                 players = data.get("players", [])
+                game_state_str = data.get("game_state", "playing")
 
                 try:
                     # --- 🧠 Rebuild game board completely ---
@@ -1713,22 +2617,42 @@ class GomokuUI:
                         last_move = self.game.move_history[-1]
                         self.last_move_pos = (last_move.row, last_move.col)
 
-                    # --- 🎮 Restore turn and UI state ---
+                    # --- 🎮 Restore game state ---
                     self.game.current_player = Player(current_player)
-                    self.ui_state = UIState.GAMEPLAY
-                    self.paused = False
-                    self.turn_start_time = time.time()
-                    self.elapsed_before_pause = 0
+                    self.game.game_state = GameState(game_state_str)
+                    
+                    # Restore winner if game is over
+                    if self.game.game_state in [GameState.BLACK_WINS, GameState.WHITE_WINS]:
+                        self.game.winner = self.game.current_player
+                    
+                    # --- 🎮 Restore UI state ---
+                    if self.game.game_state == GameState.PLAYING:
+                        self.ui_state = UIState.GAMEPLAY
+                        self.paused = False
+                        self.turn_start_time = time.time()
+                        self.elapsed_before_pause = 0
+                        # Restart background music if it was playing
+                        if not pygame.mixer.music.get_busy():
+                            self._play_background_music()
+                    else:
+                        # Game is over, show game over screen
+                        self.ui_state = UIState.GAME_OVER
+                        self.paused = False
+                        self.turn_start_time = None
+                        self.elapsed_before_pause = 0
 
                     # --- 🖼️ Force board redraw ---
-                    self.game.game_state = GameState.PLAYING
                     self._draw_board()
                     pygame.display.flip()
 
-                    print(f"✅ Restored {len(moves)} moves and board ({sum(cell != 0 for row in board for cell in row)} stones), turn: {self.game.current_player.name}")
+                    print(f"✅ Restored {len(moves)} moves and board ({sum(cell != 0 for row in board for cell in row)} stones), turn: {self.game.current_player.name}, state: {self.game.game_state.value}")
 
                 except Exception as e:
                     print(f"⚠️ Error restoring reconnect state: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Fallback: reset to waiting room
+                    self.ui_state = UIState.ROOM_WAITING
 
             self.network_manager.set_connection_callback("connect", handle_connect)
             self.network_manager.set_connection_callback("disconnect", handle_disconnect)
@@ -1743,6 +2667,22 @@ class GomokuUI:
             self.network_manager.set_message_handler("player_resign", handle_player_resign)
             self.network_manager.set_message_handler("resign_ack", handle_resign_ack)
             self.network_manager.set_message_handler("reconnect_success", handle_reconnect_success)
+            
+            def handle_player_left_room(data):
+                """Handle when opponent leaves the room"""
+                player_name = data.get("player_name", "Unknown")
+                print(f"🚪 {player_name} left the room")
+                
+                # If we're in gameplay or game over, move back to waiting room
+                if self.ui_state in [UIState.GAMEPLAY, UIState.GAME_OVER]:
+                    # Reset game state
+                    self.game.reset_game()
+                    self.ui_state = UIState.ROOM_WAITING
+                    # Stop background music
+                    self._stop_background_music()
+                    print(f"📋 Moved back to waiting room (you are now the host)")
+            
+            self.network_manager.set_message_handler("player_left_room", handle_player_left_room)
             
             # Get server configuration
             server_config = self.server_config_manager.get_current_config()
@@ -1872,9 +2812,13 @@ class GomokuUI:
             # Fallback to local new game
             self._start_new_game()
     
-    def _start_ai_thinking(self):
+    def _start_ai_thinking(self, ai_player: AIPlayer = None):
         """Start AI thinking in a separate thread"""
-        if self.ai_thinking or not self.ai_player:
+        # Use provided AI player or fallback to self.ai_player
+        if ai_player is None:
+            ai_player = self.ai_player
+        
+        if self.ai_thinking or not ai_player:
             return
         
         self.ai_thinking = True
@@ -1884,22 +2828,26 @@ class GomokuUI:
         def ai_worker():
             try:
                 # Create a copy of the game state for the AI thread
-                game_copy = GomokuGame()
+                game_copy = GomokuGame(num_players=self.game.num_players)
                 game_copy.board = [row[:] for row in self.game.board]
                 game_copy.current_player = self.game.current_player
+                game_copy.player_index = self.game.player_index
+                game_copy.players = self.game.players[:]
                 game_copy.move_history = self.game.move_history[:]
                 game_copy.game_state = self.game.game_state
                 
                 # Get AI move
-                move = self.ai_player.get_move(game_copy)
+                move = ai_player.get_move(game_copy)
                 self.ai_move_result = move
             except Exception as e:
                 print(f"AI thinking error: {e}")
+                import traceback
+                traceback.print_exc()
                 self.ai_move_result = None
         
         self.ai_thread = threading.Thread(target=ai_worker, daemon=True)
         self.ai_thread.start()
-        print(f"AI started thinking... (difficulty: {self.ai_difficulty})")
+        print(f"AI ({self.game.current_player.name}) started thinking... (difficulty: {self.ai_difficulty})")
     
     def _update_server_buttons(self):
         """Update server selection buttons (centered for 800px width)"""

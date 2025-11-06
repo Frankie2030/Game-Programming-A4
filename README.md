@@ -18,11 +18,15 @@ This project implements Gomoku (also known as Five in a Row or Connect Five) as 
 ### Key Features
 
 - **Multiple Game Modes**: Local PvP, Player vs AI, Online multiplayer
-- **Intelligent AI**: Minimax algorithm with Alpha-Beta pruning
+- **Intelligent AI**: Minimax algorithm with Alpha-Beta pruning and real-time debugging
 - **Difficulty Levels**: Easy, Medium, Hard, and Expert AI opponents
 - **Network Play**: Host or join online games with other players
 - **Save/Resume**: Complete save and load functionality
-- **Modern UI**: Clean, intuitive interface built with Pygame
+- **Modern UI**: Clean, intuitive interface with background images and visual effects
+- **Sound System**: Sound effects for moves, game start, and winner announcements
+- **Background Music**: Ambient background music that loops during gameplay
+- **AI Debug Viewer**: Real-time visualization of AI thinking process (press 'D' key)
+- **Advanced Features**: Pause/resume, turn timers, resign functionality
 
 ## Game Rules
 
@@ -98,10 +102,17 @@ Be the first player to get exactly **5 stones in a row** (horizontally, vertical
 #### 2. Player vs AI
 - Human player (Black) vs Computer opponent (White)
 - Choose from 4 difficulty levels:
-  - **Easy**: Depth 2, basic evaluation
-  - **Medium**: Depth 4, smart move selection
-  - **Hard**: Depth 6, advanced pruning
-  - **Expert**: Depth 8, maximum strength
+  - **Easy**: Depth 2, basic evaluation (~100-500 nodes/second)
+  - **Medium**: Depth 4, smart move selection (~1000-2000 nodes/second)
+  - **Hard**: Depth 6, advanced pruning (~2000-5000 nodes/second)
+  - **Expert**: Depth 8, maximum strength (~5000+ nodes/second)
+
+**AI Debug Viewer** (Press 'D' during gameplay):
+- Real-time display of AI thinking process
+- Shows nodes evaluated, pruning count, search depth
+- Displays move evaluations with scores as AI thinks
+- Visualizes best move found so far
+- See how alpha-beta pruning works in real-time
 
 #### 3. Network Multiplayer
 
@@ -167,9 +178,11 @@ python main.py
 - **Mouse Click**: Place stone on board intersection
 - **Pause Button**: Pause game and access menu
 - **Resign Button**: Forfeit current game
+- **'D' Key**: Toggle AI debug viewer (AI games only)
 
 #### Keyboard Shortcuts
 - **ESC**: Pause game
+- **D**: Toggle AI debug information panel (shows real-time thinking)
 - **Ctrl+S**: Quick save (when available)
 
 ### Save & Resume System
@@ -192,14 +205,23 @@ The AI uses the classic Minimax algorithm enhanced with Alpha-Beta pruning for e
 #### Core Components
 
 1. **Position Evaluation**
-   - Analyzes potential winning patterns
-   - Scores based on consecutive stones
+   - Analyzes potential winning patterns in all directions
+   - Scores based on consecutive stones (1, 2, 3, 4+ in a row)
    - Considers blocking opponent threats
+   - Evaluates both offensive and defensive potential
+   - Scoring system:
+     - 4+ in a row: 1000 points (winning move)
+     - 3 unblocked: 100 points
+     - 3 blocked: 10 points
+     - 2 unblocked: 10 points
+     - 2 blocked: 2 points
+     - 1 stone: 1 point
 
 2. **Search Strategy**
    - Iterative deepening for time management
    - Smart move ordering for better pruning
-   - Focused search on promising areas
+   - Focused search on promising areas (moves near existing stones)
+   - Real-time statistics tracking
 
 3. **Difficulty Scaling**
    ```python
@@ -215,6 +237,30 @@ The AI uses the classic Minimax algorithm enhanced with Alpha-Beta pruning for e
 - **Medium**: ~1000-2000 nodes/second, solid tactical play
 - **Hard**: ~2000-5000 nodes/second, strong strategic play
 - **Expert**: ~5000+ nodes/second, near-optimal play
+
+#### AI Debug Viewer
+
+Press **'D'** during AI gameplay to see real-time thinking:
+
+**Real-Time Display** (while AI is thinking):
+- Current search depth
+- Nodes evaluated so far
+- Best move found with score
+- Currently evaluating moves (shown with "→" indicator)
+- Completed move evaluations with scores
+
+**Final Statistics** (after AI moves):
+- Total nodes evaluated
+- Pruning count and efficiency percentage
+- Maximum depth reached
+- Search time and nodes per second
+- Top 5 move evaluations with scores
+
+This feature helps you understand:
+- How the AI evaluates positions
+- Which moves are being considered
+- How alpha-beta pruning reduces search space
+- Why the AI chooses specific moves
 
 ## Network Architecture
 
@@ -279,14 +325,28 @@ The multiplayer system uses a reliable TCP-based client-server architecture.
 A4/
 ├── main.py                 # Main entry point
 ├── README.md              # This file
-├── src/                   # Source code
-│   ├── gomoku_game.py     # Core game logic
-│   ├── ai_player.py       # AI implementation
-│   ├── network_manager.py # Network communication
-│   ├── game_ui.py         # Pygame user interface
-│   └── game_states.py     # Save/load system
-├── saves/                 # Save game files
-└── tests/                 # Unit tests (future)
+├── REQUIREMENTS_CHECKLIST.md  # Requirements tracking
+├── server_configs.json     # Network server configurations
+├── src/                    # Source code
+│   ├── gomoku_game.py      # Core game logic
+│   ├── ai_player.py        # AI implementation with debug stats
+│   ├── ai_validator.py     # AI testing utilities
+│   ├── stable_client.py    # Network client implementation
+│   ├── dedicated_server.py # Standalone game server
+│   ├── lobby_manager.py    # Lobby and room management
+│   ├── server_config.py    # Server configuration management
+│   ├── game_ui.py          # Pygame user interface
+│   ├── game_states.py      # Save/load system
+│   ├── sounds/             # Sound effects
+│   │   ├── board-start-38127.mp3
+│   │   ├── calm-nature-sounds-196258.mp3
+│   │   ├── play_turn.mp3
+│   │   └── winner-game-sound-404167.mp3
+│   └── imgs/               # Background images
+│       ├── image_game.webp
+│       └── image_start.jpg
+├── saved_game.json         # Current saved game (if exists)
+└── requirements.txt       # Python dependencies
 ```
 
 ## Technical Specifications
@@ -339,9 +399,10 @@ python -m pytest tests/
 - [ ] Tournament bracket system
 - [ ] AI vs AI demonstration mode
 - [ ] Enhanced graphics and animations
-- [ ] Sound effects and music
 - [ ] Replay system
 - [ ] Online matchmaking
+- [ ] Coordinate display option
+- [ ] Move history viewer
 
 ## Development Notes
 
