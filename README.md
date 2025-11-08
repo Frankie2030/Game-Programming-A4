@@ -79,6 +79,22 @@ Be the first player to get exactly **5 stones in a row** (horizontally, vertical
 
 ## How to Play
 
+### Rules
+1. Objective
+   - Players take turns placing stones (Black goes first).
+   - The goal is to be the first to form an unbroken line of exactly five stones horizontally, vertically, or diagonally.
+2. Winning Condition
+   - A player wins immediately when they create a line of five stones in a row.
+   - The line may be either: open at one end, open at both ends, or blocked at one or both ends.
+   - Lines of 6 or more (overlines) also count as a victory.
+3. Board
+   - The standard board is 15×15 cells (commonly used in competitive play).
+4. Notes
+   - You cannot move or remove stones already placed.
+   - You cannot place on an occupied intersection.
+5. Draw Conditions
+   - A game may end in a draw only if both players agree, or the board is completely full with no five-in-a-row for either player.
+
 ### Starting the Game
 
 1. **Launch the application**
