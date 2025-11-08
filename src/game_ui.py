@@ -1837,17 +1837,19 @@ class GomokuUI:
         pygame.draw.circle(self.screen, Colors.RED, (center_x, center_y), radius, 3)
     
     def _draw_game_info(self):
-        """Draw game information panel with enhanced visibility"""
+        """Draw game information panel with enhanced visibility and proper text wrapping"""
         info_x = 520  # Adjusted for new board position
         info_y = 120  # Moved up to align with new board position
-        panel_width = 260
+        panel_width = 240  # Slightly reduced width to ensure fit
         panel_padding = 15
+        text_margin = 5
+        max_text_width = panel_width - (2 * panel_padding) - 20  # Account for padding and scrollbar
         
         # Create semi-transparent background panel for better readability
         # Adjust height based on number of players and debug panel
         num_players = len(self.game.players) if hasattr(self.game, 'players') else 2
         base_height = 80  # Base height for title and separator
-        player_section_height = num_players * 26  # 26px per player
+        player_section_height = num_players * 30  # Increased line height for better readability
         moves_section_height = 50  # Moves and mode info
         panel_height = base_height + player_section_height + moves_section_height
         
@@ -1859,37 +1861,68 @@ class GomokuUI:
         if self.is_network_game:
             panel_height += 10
         
-        info_panel = pygame.Surface((panel_width, panel_height))
-        info_panel.set_alpha(230)  # More opaque for better readability
-        info_panel.fill((20, 20, 30))  # Dark background
+        # Ensure minimum height
+        panel_height = max(panel_height, 200)
+        
+        # Create panel surface with rounded corners
+        info_panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+        
+        # Draw rounded rectangle for panel
+        pygame.draw.rect(info_panel, (20, 20, 30, 230), (0, 0, panel_width, panel_height), border_radius=8)
+        pygame.draw.rect(info_panel, Colors.ACCENT, (0, 0, panel_width, panel_height), 3, border_radius=8)
+        
         self.screen.blit(info_panel, (info_x - panel_padding, info_y - panel_padding))
         
-        # Add border for modern look
-        border_rect = pygame.Rect(info_x - panel_padding, info_y - panel_padding, 
-                                 panel_width, panel_height)
-        pygame.draw.rect(self.screen, Colors.ACCENT, border_rect, 3)
+        # Helper function to render wrapped text
+        def render_text_with_wrap(text, font, color, x, y, max_width):
+            words = text.split(' ')
+            lines = []
+            current_line = []
+            
+            for word in words:
+                test_line = ' '.join(current_line + [word])
+                test_width = font.size(test_line)[0]
+                
+                if test_width <= max_width:
+                    current_line.append(word)
+                else:
+                    lines.append(' '.join(current_line))
+                    current_line = [word]
+            
+            if current_line:
+                lines.append(' '.join(current_line))
+            
+            for i, line in enumerate(lines):
+                text_surface = font.render(line, True, color)
+                text_shadow = font.render(line, True, (0, 0, 0))
+                self.screen.blit(text_shadow, (x + 1, y + (i * (font.get_height() + 2)) + 1))
+                self.screen.blit(text_surface, (x, y + (i * (font.get_height() + 2))))
+            
+            return len(lines) * (font.get_height() + 2)
         
-        # Current player with name (highlighted) - larger font, brighter color
+        # Current player with name (highlighted)
         current_player_name = self.player_names.get(self.game.current_player, "Unknown")
         current_text = f"Current Player: {current_player_name}"
         
-        # Text shadow for depth
-        current_shadow = self.font_info.render(current_text, True, (0, 0, 0))
-        self.screen.blit(current_shadow, (info_x + 1, info_y + 1))
-        
-        # Main text - bright white for visibility
-        current_surface = self.font_info.render(current_text, True, Colors.WHITE)
-        self.screen.blit(current_surface, (info_x, info_y))
+        # Render current player text with wrapping
+        y_offset = render_text_with_wrap(
+            current_text, 
+            self.font_info, 
+            Colors.WHITE, 
+            info_x, 
+            info_y, 
+            max_text_width
+        )
         
         # Add separator line after current player
-        separator_y = info_y + 32
+        separator_y = info_y + y_offset + 5
         pygame.draw.line(self.screen, Colors.ACCENT, 
                         (info_x - 10, separator_y),
                         (info_x + panel_width - 25, separator_y), 2)
         
         # Show all players in the game (supports 2-5 players)
-        player_y = info_y + 42
-        line_height = 26
+        player_y = separator_y + 10
+        line_height = 30  # Increased line height
         
         # Get all players in the game
         if hasattr(self.game, 'players') and self.game.players:
@@ -1931,13 +1964,17 @@ class GomokuUI:
                    (your_role == 'white' and player == Player.WHITE):
                     player_text += " (YOU)"
             
-            # Draw player info with shadows
-            player_shadow = self.font_info.render(player_text, True, (0, 0, 0))
-            self.screen.blit(player_shadow, (info_x + 1, player_y + 1))
-            player_surface = self.font_info.render(player_text, True, player_color)
-            self.screen.blit(player_surface, (info_x, player_y))
+            # Draw player info with wrapping
+            lines_used = render_text_with_wrap(
+                player_text,
+                self.font_small,  # Slightly smaller font for player info
+                player_color,
+                info_x,
+                player_y,
+                max_text_width
+            )
             
-            player_y += line_height
+            player_y += max(line_height, lines_used)  # Ensure minimum line height
         
         # Move count - positioned after all players
         move_y = player_y + 10  # Add spacing after players
