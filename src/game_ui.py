@@ -210,6 +210,7 @@ class GomokuUI:
         self.pause_start_time = None
         self.pause_allowance = {Player.BLACK: 2, Player.WHITE: 2}  # tokens
         self.per_pause_limit = 30  # seconds (limit per individual pause, not cumulative)
+        self.show_pause_info = False  # Toggle for showing/hiding pause info
         
         # AI threading
         self.ai_thinking = False
@@ -218,6 +219,11 @@ class GomokuUI:
         self.thinking_start_time = 0
         self.my_player = Player.BLACK
         self.waiting_for_network = False
+        
+        # Pause info toggle button
+        self.pause_icon_rect = pygame.Rect(10, 10, 32, 32)  # Position and size of the icon
+        self.pause_icon_color = (200, 200, 200)  # Light gray color for the icon
+        self.show_all_players = False  # Whether to show all players or just current
         
         # AI Debug viewer
         self.ai_debug_enabled = False  # Toggle with 'D' key
@@ -706,11 +712,20 @@ class GomokuUI:
     
     def _handle_gameplay_events(self, event):
         """Handle gameplay events"""
+        # Handle mouse clicks for pause info toggle
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1:  # Left mouse button
+                if self.pause_icon_rect.collidepoint(event.pos):
+                    self.show_all_players = not self.show_all_players
+                    return  # Skip other button handling if we toggled pause info
+        
         # Handle keyboard shortcuts
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_d:  # Toggle AI debug view
                 self.ai_debug_enabled = not self.ai_debug_enabled
                 print(f"🔍 AI Debug View: {'ON' if self.ai_debug_enabled else 'OFF'}")
+            elif event.key == pygame.K_p:  # Toggle between showing all players and current player only
+                self.show_all_players = not self.show_all_players
         
         buttons = self.buttons["gameplay"]
 
@@ -1237,51 +1252,74 @@ class GomokuUI:
             timer_text = self.font_medium.render(f"{remaining:02d}s", True, color)
             self.screen.blit(timer_text, timer_text.get_rect(center=timer_rect.center))
 
-            # === 2️⃣ Pause info boxes (below main timer) ===
-            y = 10
-            box_width = 220  # Increased width
-            box_height = 42  # Increased height
+            # Draw list icon button
+            button_color = (100, 100, 100, 180) if not self.show_pause_info else (70, 130, 180, 220)
+            button_surface = pygame.Surface((self.pause_icon_rect.width, self.pause_icon_rect.height), pygame.SRCALPHA)
+            pygame.draw.rect(button_surface, button_color, (0, 0, self.pause_icon_rect.width, self.pause_icon_rect.height), 0, 5)
             
-            # Get all players in the game
-            if hasattr(self.game, 'players') and self.game.players:
-                all_players = self.game.players
-            else:
-                # Fallback for 2-player games
-                all_players = [Player.BLACK, Player.WHITE]
+            # Draw list icon (three horizontal lines)
+            line_height = 2
+            line_gap = 4
+            line_width = 16
             
-            for player in all_players:
-                # Skip if player doesn't have pause allowance (shouldn't happen, but safety check)
-                if player not in self.pause_allowance:
-                    continue
-                    
-                label = self.player_names.get(player, f"Player {player.name}")
-                pauses_left = self.pause_allowance[player]
-                pause_time = self.per_pause_limit  # constant per pause, not a running pool
-
-                pause_rect = pygame.Rect(20, y, box_width, box_height)
-                # Background panel for better visibility
-                pause_bg = pygame.Surface((pause_rect.width, pause_rect.height))
-                pause_bg.set_alpha(240)
-                pause_bg.fill((20, 20, 30))  # Dark background
-                self.screen.blit(pause_bg, pause_rect)
+            # Draw three horizontal lines
+            for i in range(3):
+                y_pos = self.pause_icon_rect.height // 2 - line_gap + (i * (line_height + line_gap)) - 2
+                pygame.draw.rect(button_surface, (255, 255, 255), 
+                               ((self.pause_icon_rect.width - line_width) // 2, y_pos, 
+                                line_width, line_height), 0, 2)
+            
+            self.screen.blit(button_surface, self.pause_icon_rect)
+            
+            # === Pause info boxes (moved to the right to avoid icon) ===
+            if True:  # Always show at least the current player
+                y = 10
+                box_width = 220  # Increased width
+                box_height = 42  # Increased height
+                x_offset = 45  # Move right to avoid overlapping with list icon
                 
-                # Highlight current player's box with colored border
-                if self.game.current_player == player:
-                    pygame.draw.rect(self.screen, Colors.SUCCESS, pause_rect, 3)  # Green border for current player
+                # Get players to show (current player only or all players)
+                if hasattr(self.game, 'players') and self.game.players:
+                    players_to_show = self.game.players if self.show_all_players else [self.game.current_player]
                 else:
-                    pygame.draw.rect(self.screen, Colors.WHITE, pause_rect, 2)  # White border for others
-
-                pause_text = f"{label}: {pauses_left}× {pause_time}s"
-                # Text with shadow
-                text_shadow = self.font_info.render(pause_text, True, (0, 0, 0))
-                text_shadow_rect = text_shadow.get_rect(center=(pause_rect.centerx + 1, pause_rect.centery + 1))
-                self.screen.blit(text_shadow, text_shadow_rect)
+                    # Fallback for 2-player games
+                    players_to_show = [Player.BLACK, Player.WHITE] if self.show_all_players else [self.game.current_player]
                 
-                # Highlight current player's text
-                text_color = Colors.SUCCESS if self.game.current_player == player else Colors.WHITE
-                text_surface = self.font_info.render(pause_text, True, text_color)
-                self.screen.blit(text_surface, text_surface.get_rect(center=pause_rect.center))
-                y += box_height + 8
+                for player in players_to_show:
+                    # Skip if player doesn't have pause allowance (shouldn't happen, but safety check)
+                    if player not in self.pause_allowance:
+                        continue
+                        
+                    label = self.player_names.get(player, f"Player {player.name}")
+                    pauses_left = self.pause_allowance[player]
+                    pause_time = self.per_pause_limit  # constant per pause, not a running pool
+
+                    pause_rect = pygame.Rect(20 + x_offset, y, box_width, box_height)
+                    
+                    # Background panel for better visibility
+                    pause_bg = pygame.Surface((pause_rect.width, pause_rect.height))
+                    pause_bg.set_alpha(240)
+                    pause_bg.fill((20, 20, 30))  # Dark background
+                    self.screen.blit(pause_bg, pause_rect)
+                    
+                    # Highlight current player's box with colored border
+                    if self.game.current_player == player:
+                        pygame.draw.rect(self.screen, Colors.SUCCESS, pause_rect, 3)  # Green border for current player
+                    else:
+                        pygame.draw.rect(self.screen, Colors.WHITE, pause_rect, 2)  # White border for others
+
+                    pause_text = f"{label}: {pauses_left}× {pause_time}s"
+                    # Text with shadow
+                    text_shadow = self.font_info.render(pause_text, True, (0, 0, 0))
+                    text_shadow_rect = text_shadow.get_rect(center=(pause_rect.centerx + 1, pause_rect.centery + 1))
+                    self.screen.blit(text_shadow, text_shadow_rect)
+                    
+                    # Highlight current player's text
+                    text_color = Colors.SUCCESS if self.game.current_player == player else Colors.WHITE
+                    text_surface = self.font_info.render(pause_text, True, text_color)
+                    self.screen.blit(text_surface, text_surface.get_rect(center=pause_rect.center))
+                    
+                    y += box_height + 8
         pygame.display.flip()
     
     def _draw_main_menu(self):
@@ -1395,15 +1433,20 @@ class GomokuUI:
     
     def _draw_gameplay(self):
         """Draw gameplay screen"""
-        # Draw board
+        # Draw the game board
         self._draw_board()
         
-        # Draw game info
+        # Draw game info panel
         self._draw_game_info()
         
         # Draw AI debug panel if enabled
-        if self.ai_debug_enabled and self.game_mode == GameMode.AI_GAME:
+        if self.ai_debug_enabled and self.ai_player:
             self._draw_ai_debug_panel()
+            
+        # Draw pause menu if game is paused
+        if self.paused:
+            self._draw_pause_menu()
+            
         
         # Draw buttons
         for button in self.buttons["gameplay"]:
@@ -2098,17 +2141,19 @@ class GomokuUI:
         pygame.draw.circle(self.screen, Colors.RED, (center_x, center_y), radius, 3)
     
     def _draw_game_info(self):
-        """Draw game information panel with enhanced visibility"""
+        """Draw game information panel with enhanced visibility and proper text wrapping"""
         info_x = 520  # Adjusted for new board position
         info_y = 120  # Moved up to align with new board position
-        panel_width = 260
+        panel_width = 240  # Slightly reduced width to ensure fit
         panel_padding = 15
+        text_margin = 5
+        max_text_width = panel_width - (2 * panel_padding) - 20  # Account for padding and scrollbar
         
         # Create semi-transparent background panel for better readability
         # Adjust height based on number of players and debug panel
         num_players = len(self.game.players) if hasattr(self.game, 'players') else 2
         base_height = 80  # Base height for title and separator
-        player_section_height = num_players * 26  # 26px per player
+        player_section_height = num_players * 30  # Increased line height for better readability
         moves_section_height = 50  # Moves and mode info
         panel_height = base_height + player_section_height + moves_section_height
         
@@ -2120,37 +2165,68 @@ class GomokuUI:
         if self.is_network_game:
             panel_height += 10
         
-        info_panel = pygame.Surface((panel_width, panel_height))
-        info_panel.set_alpha(230)  # More opaque for better readability
-        info_panel.fill((20, 20, 30))  # Dark background
+        # Ensure minimum height
+        panel_height = max(panel_height, 200)
+        
+        # Create panel surface with rounded corners
+        info_panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+        
+        # Draw rounded rectangle for panel
+        pygame.draw.rect(info_panel, (20, 20, 30, 230), (0, 0, panel_width, panel_height), border_radius=8)
+        pygame.draw.rect(info_panel, Colors.ACCENT, (0, 0, panel_width, panel_height), 3, border_radius=8)
+        
         self.screen.blit(info_panel, (info_x - panel_padding, info_y - panel_padding))
         
-        # Add border for modern look
-        border_rect = pygame.Rect(info_x - panel_padding, info_y - panel_padding, 
-                                 panel_width, panel_height)
-        pygame.draw.rect(self.screen, Colors.ACCENT, border_rect, 3)
+        # Helper function to render wrapped text
+        def render_text_with_wrap(text, font, color, x, y, max_width):
+            words = text.split(' ')
+            lines = []
+            current_line = []
+            
+            for word in words:
+                test_line = ' '.join(current_line + [word])
+                test_width = font.size(test_line)[0]
+                
+                if test_width <= max_width:
+                    current_line.append(word)
+                else:
+                    lines.append(' '.join(current_line))
+                    current_line = [word]
+            
+            if current_line:
+                lines.append(' '.join(current_line))
+            
+            for i, line in enumerate(lines):
+                text_surface = font.render(line, True, color)
+                text_shadow = font.render(line, True, (0, 0, 0))
+                self.screen.blit(text_shadow, (x + 1, y + (i * (font.get_height() + 2)) + 1))
+                self.screen.blit(text_surface, (x, y + (i * (font.get_height() + 2))))
+            
+            return len(lines) * (font.get_height() + 2)
         
-        # Current player with name (highlighted) - larger font, brighter color
+        # Current player with name (highlighted)
         current_player_name = self.player_names.get(self.game.current_player, "Unknown")
         current_text = f"Current Player: {current_player_name}"
         
-        # Text shadow for depth
-        current_shadow = self.font_info.render(current_text, True, (0, 0, 0))
-        self.screen.blit(current_shadow, (info_x + 1, info_y + 1))
-        
-        # Main text - bright white for visibility
-        current_surface = self.font_info.render(current_text, True, Colors.WHITE)
-        self.screen.blit(current_surface, (info_x, info_y))
+        # Render current player text with wrapping
+        y_offset = render_text_with_wrap(
+            current_text, 
+            self.font_info, 
+            Colors.WHITE, 
+            info_x, 
+            info_y, 
+            max_text_width
+        )
         
         # Add separator line after current player
-        separator_y = info_y + 32
+        separator_y = info_y + y_offset + 5
         pygame.draw.line(self.screen, Colors.ACCENT, 
                         (info_x - 10, separator_y),
                         (info_x + panel_width - 25, separator_y), 2)
         
         # Show all players in the game (supports 2-5 players)
-        player_y = info_y + 42
-        line_height = 26
+        player_y = separator_y + 10
+        line_height = 30  # Increased line height
         
         # Get all players in the game
         if hasattr(self.game, 'players') and self.game.players:
@@ -2192,13 +2268,17 @@ class GomokuUI:
                    (your_role == 'white' and player == Player.WHITE):
                     player_text += " (YOU)"
             
-            # Draw player info with shadows
-            player_shadow = self.font_info.render(player_text, True, (0, 0, 0))
-            self.screen.blit(player_shadow, (info_x + 1, player_y + 1))
-            player_surface = self.font_info.render(player_text, True, player_color)
-            self.screen.blit(player_surface, (info_x, player_y))
+            # Draw player info with wrapping
+            lines_used = render_text_with_wrap(
+                player_text,
+                self.font_small,  # Slightly smaller font for player info
+                player_color,
+                info_x,
+                player_y,
+                max_text_width
+            )
             
-            player_y += line_height
+            player_y += max(line_height, lines_used)  # Ensure minimum line height
         
         # Move count - positioned after all players
         move_y = player_y + 10  # Add spacing after players
