@@ -15,6 +15,11 @@ COPY . $APP_HOME
 # --- Install Dependencies ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
         netcat-openbsd \
+        libglib2.0-0 \
+        libgthread-2.0-0 \
+        libsdl2-mixer-2.0-0 \
+        libsdl2-image-2.0-0 \
+        libsdl2-ttf-2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir --upgrade pip && \
