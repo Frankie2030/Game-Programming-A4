@@ -207,6 +207,7 @@ class GomokuGame:
         """
         Get a limited set of promising moves for AI evaluation.
         Returns moves near existing stones to improve AI performance.
+        Prioritizes moves within 2 squares of existing stones for deeper search.
         """
         if not self.move_history:
             # First move - return center and nearby positions
@@ -216,13 +217,14 @@ class GomokuGame:
         
         candidate_moves = set()
         
-        # Add moves adjacent to existing stones
+        # Add moves within 2 squares of existing stones (for better tactical play)
+        search_radius = 2
         for row in range(self.BOARD_SIZE):
             for col in range(self.BOARD_SIZE):
                 if self.board[row][col] != Player.EMPTY:
-                    # Add all adjacent empty positions
-                    for dr in [-1, 0, 1]:
-                        for dc in [-1, 0, 1]:
+                    # Add all positions within search_radius
+                    for dr in range(-search_radius, search_radius + 1):
+                        for dc in range(-search_radius, search_radius + 1):
                             if dr == 0 and dc == 0:
                                 continue
                             new_row, new_col = row + dr, col + dc
@@ -231,34 +233,165 @@ class GomokuGame:
                                 self.board[new_row][new_col] == Player.EMPTY):
                                 candidate_moves.add((new_row, new_col))
         
-        # Convert to list and limit
-        moves = list(candidate_moves)
+        # Sort moves by strategic value (closer to center is better early game)
+        center = self.BOARD_SIZE // 2
+        moves_with_score = []
+        for move in candidate_moves:
+            row, col = move
+            # Calculate distance from center (Manhattan distance)
+            center_distance = abs(row - center) + abs(col - center)
+            # Calculate proximity to existing stones
+            min_distance = self.BOARD_SIZE
+            for r in range(self.BOARD_SIZE):
+                for c in range(self.BOARD_SIZE):
+                    if self.board[r][c] != Player.EMPTY:
+                        dist = max(abs(row - r), abs(col - c))  # Chebyshev distance
+                        min_distance = min(min_distance, dist)
+            
+            # Prefer moves close to existing stones and not too far from center
+            score = -min_distance * 10 - center_distance
+            moves_with_score.append((score, move))
+        
+        # Sort by score and return top candidates
+        moves_with_score.sort(reverse=True)
+        moves = [move for score, move in moves_with_score]
+        
         return moves[:limit] if len(moves) > limit else moves
     
     def evaluate_position(self, player: Player) -> int:
         """
-        Evaluate the board position for the given player.
+        Enhanced evaluation function with strong defensive capabilities.
         Returns a score where positive is good for the player.
         """
         if self.game_state == GameState.BLACK_WINS:
-            return 10000 if player == Player.BLACK else -10000
+            return 100000 if player == Player.BLACK else -100000
         elif self.game_state == GameState.WHITE_WINS:
-            return 10000 if player == Player.WHITE else -10000
+            return 100000 if player == Player.WHITE else -100000
         elif self.game_state == GameState.DRAW:
             return 0
         
         score = 0
         opponent = Player.WHITE if player == Player.BLACK else Player.BLACK
         
-        # Evaluate all positions on the board
+        # First, check for immediate threats that MUST be blocked
+        player_score = 0
+        opponent_score = 0
+        
+        # Evaluate all lines on the board (check existing patterns)
+        directions = [(0, 1), (1, 0), (1, 1), (1, -1)]  # horizontal, vertical, diagonals
+        
         for row in range(self.BOARD_SIZE):
             for col in range(self.BOARD_SIZE):
-                if self.board[row][col] == Player.EMPTY:
-                    # Evaluate potential of this position
-                    score += self._evaluate_position_potential(row, col, player)
-                    score -= self._evaluate_position_potential(row, col, opponent)
+                if self.board[row][col] != Player.EMPTY:
+                    # Evaluate patterns starting from occupied positions
+                    for dr, dc in directions:
+                        # Only check in positive direction to avoid double counting
+                        player_at_pos = self.board[row][col]
+                        pattern_score = self._evaluate_pattern(row, col, dr, dc, player_at_pos)
+                        if player_at_pos == player:
+                            player_score += pattern_score
+                        else:
+                            opponent_score += pattern_score
+                
+                else:
+                    # Evaluate potential of empty positions
+                    player_potential = self._evaluate_position_potential(row, col, player)
+                    opponent_potential = self._evaluate_position_potential(row, col, opponent)
+                    
+                    player_score += player_potential
+                    opponent_score += opponent_potential
         
-        return score
+        # CRITICAL: Heavily weight opponent threats for defensive play
+        # If opponent has a strong threat (open four, open three), prioritize blocking
+        if opponent_score >= 12000:  # Opponent has open four (15000) or near-win
+            # MUST block immediately - make defense absolutely critical
+            score = -opponent_score * 2.5
+            print(f"🚨 CRITICAL THREAT DETECTED! Opponent score: {opponent_score}")
+        elif opponent_score >= 4000:  # Opponent has open three (5000) or four (8000)
+            # Very high priority defense - open three WILL become open four!
+            score = player_score - (opponent_score * 2.2)
+            print(f"⚠️  HIGH THREAT: Open three or four detected! Opponent score: {opponent_score}")
+        elif opponent_score >= 700:  # Opponent has three with one end open
+            # High priority defense
+            score = player_score - (opponent_score * 1.8)
+        else:
+            # Normal play - still defensive but balanced
+            score = player_score - (opponent_score * 1.3)
+        
+        return int(score)
+    
+    
+    def _evaluate_pattern(self, row: int, col: int, dr: int, dc: int, player: Player) -> int:
+        """
+        Evaluate a pattern starting from a given position.
+        Returns score for the pattern found.
+        """
+        count = 1  # Count the starting stone
+        open_ends = 0
+        
+        # Check positive direction
+        r, c = row + dr, col + dc
+        empty_after = False
+        while (0 <= r < self.BOARD_SIZE and 0 <= c < self.BOARD_SIZE and count < 5):
+            if self.board[r][c] == player:
+                count += 1
+            elif self.board[r][c] == Player.EMPTY:
+                empty_after = True
+                break
+            else:
+                break
+            r += dr
+            c += dc
+        
+        if empty_after:
+            open_ends += 1
+        
+        # Check negative direction
+        r, c = row - dr, col - dc
+        empty_before = False
+        while (0 <= r < self.BOARD_SIZE and 0 <= c < self.BOARD_SIZE and count < 5):
+            if self.board[r][c] == player:
+                count += 1
+            elif self.board[r][c] == Player.EMPTY:
+                empty_before = True
+                break
+            else:
+                break
+            r -= dr
+            c -= dc
+        
+        if empty_before:
+            open_ends += 1
+        
+        # Score based on pattern strength
+        if count >= 5:
+            return 50000  # Five in a row (win)
+        elif count == 4:
+            if open_ends == 2:
+                return 15000  # Open four (unstoppable - absolutely critical!)
+            elif open_ends == 1:
+                return 8000   # Four with one end open (must block!)
+            else:
+                return 1000   # Four blocked both ends
+        elif count == 3:
+            if open_ends == 2:
+                return 5000   # Open three (CRITICAL - will become open four!)
+            elif open_ends == 1:
+                return 800    # Three with one end open (important)
+            else:
+                return 100    # Three blocked both ends
+        elif count == 2:
+            if open_ends == 2:
+                return 100    # Open two
+            elif open_ends == 1:
+                return 20     # Two with one end open
+            else:
+                return 5      # Two blocked both ends
+        elif count == 1:
+            if open_ends >= 1:
+                return 2      # Single stone with potential
+        
+        return 0
     
     def _evaluate_position_potential(self, row: int, col: int, player: Player) -> int:
         """Evaluate the potential value of a position for a player"""
@@ -275,48 +408,69 @@ class GomokuGame:
         return total_score
     
     def _evaluate_line(self, row: int, col: int, dr: int, dc: int, player: Player) -> int:
-        """Evaluate a line in a specific direction"""
-        # Count consecutive stones and empty spaces
-        count = 0
-        blocks = 0
+        """Evaluate a line in a specific direction if we place a stone at (row, col)"""
+        # Count consecutive stones and open ends in this direction
+        count = 1  # Count the stone we're about to place
+        open_ends = 0
         
         # Check positive direction
         r, c = row + dr, col + dc
-        while (0 <= r < self.BOARD_SIZE and 0 <= c < self.BOARD_SIZE):
+        while (0 <= r < self.BOARD_SIZE and 0 <= c < self.BOARD_SIZE and count < 5):
             if self.board[r][c] == player:
                 count += 1
-            elif self.board[r][c] != Player.EMPTY:
-                blocks += 1
+            elif self.board[r][c] == Player.EMPTY:
+                open_ends += 1
                 break
             else:
                 break
             r += dr
             c += dc
         
+        # If we went off board or hit maximum, check if edge is open
+        if count < 5 and 0 <= r < self.BOARD_SIZE and 0 <= c < self.BOARD_SIZE:
+            if self.board[r][c] == Player.EMPTY:
+                open_ends += 1
+        
         # Check negative direction
         r, c = row - dr, col - dc
-        while (0 <= r < self.BOARD_SIZE and 0 <= c < self.BOARD_SIZE):
+        while (0 <= r < self.BOARD_SIZE and 0 <= c < self.BOARD_SIZE and count < 5):
             if self.board[r][c] == player:
                 count += 1
-            elif self.board[r][c] != Player.EMPTY:
-                blocks += 1
+            elif self.board[r][c] == Player.EMPTY:
+                open_ends += 1
                 break
             else:
                 break
             r -= dr
             c -= dc
         
-        # Score based on count and blocks
-        if count >= 4:
-            return 1000  # Winning move
+        # Score based on count and openness
+        if count >= 5:
+            return 100000  # Winning move
+        elif count == 4:
+            if open_ends >= 1:
+                return 50000  # Four that can become five
+            else:
+                return 5000   # Four blocked
         elif count == 3:
-            return 100 if blocks == 0 else 10
+            if open_ends == 2:
+                return 5000   # Open three (very strong)
+            elif open_ends == 1:
+                return 1000   # Three with one end open
+            else:
+                return 200    # Blocked three
         elif count == 2:
-            return 10 if blocks == 0 else 2
+            if open_ends == 2:
+                return 500    # Open two
+            elif open_ends == 1:
+                return 100    # Two with one end
+            else:
+                return 20     # Blocked two
         elif count == 1:
-            return 1
+            if open_ends >= 1:
+                return 10     # Single potential
         
-        return 0
+        return 5  # Base value for any position
     
     def copy(self):
         """Create a deep copy of the game state"""

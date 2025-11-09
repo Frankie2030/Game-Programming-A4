@@ -40,10 +40,10 @@ class AIPlayer:
         
         # Difficulty settings
         self.difficulty_settings = {
-            "easy": {"max_depth": 2, "time_limit": 1.0, "use_smart_moves": False},
-            "medium": {"max_depth": 4, "time_limit": 3.0, "use_smart_moves": True},
-            "hard": {"max_depth": 6, "time_limit": 5.0, "use_smart_moves": True},
-            "expert": {"max_depth": 8, "time_limit": 10.0, "use_smart_moves": True}
+            "easy": {"max_depth": 3, "time_limit": 2.0, "use_smart_moves": False, "max_candidates": 25},
+            "medium": {"max_depth": 5, "time_limit": 5.0, "use_smart_moves": True, "max_candidates": 45},
+            "hard": {"max_depth": 7, "time_limit": 8.0, "use_smart_moves": True, "max_candidates": 55},
+            "expert": {"max_depth": 9, "time_limit": 15.0, "use_smart_moves": True, "max_candidates": 70}
         }
         
         if difficulty not in self.difficulty_settings:
@@ -86,12 +86,12 @@ class AIPlayer:
         
         # Get candidate moves
         if settings["use_smart_moves"]:
-            legal_moves = game.get_smart_moves(limit=30)
+            legal_moves = game.get_smart_moves(limit=settings["max_candidates"])
         else:
             legal_moves = game.get_legal_moves()
-            if len(legal_moves) > 20:
+            if len(legal_moves) > settings["max_candidates"]:
                 # For easy mode, randomly sample moves to make it weaker
-                legal_moves = random.sample(legal_moves, min(20, len(legal_moves)))
+                legal_moves = random.sample(legal_moves, min(settings["max_candidates"], len(legal_moves)))
         
         if not legal_moves:
             return None
@@ -135,14 +135,24 @@ class AIPlayer:
     def _minimax_root(self, game: GomokuGame, max_depth: int, 
                      legal_moves: List[Tuple[int, int]], 
                      start_time: float, time_limit: float) -> Tuple[Optional[Tuple[int, int]], int]:
-        """Root level minimax search"""
+        """Root level minimax search with defensive priority"""
         self.current_search_depth = max_depth
         best_move = None
         best_score = float('-inf')
         
+        # CRITICAL: Check for immediate threats that MUST be blocked
+        critical_blocks = self._find_critical_blocks(game, legal_moves)
+        if critical_blocks:
+            # If there are critical threats, prioritize checking these moves first
+            priority_moves = critical_blocks
+            other_moves = [m for m in legal_moves if m not in critical_blocks]
+            ordered_legal_moves = priority_moves + other_moves
+        else:
+            ordered_legal_moves = legal_moves
+        
         # Order moves for better pruning
         scored_moves = []
-        for move in legal_moves:
+        for move in ordered_legal_moves:
             row, col = move
             game_copy = game.copy()
             game_copy.make_move(row, col)
@@ -245,7 +255,7 @@ class AIPlayer:
             return game.evaluate_position(self.player)
         
         # Get legal moves
-        legal_moves = game.get_smart_moves(limit=25) if depth > 1 else game.get_smart_moves(limit=15)
+        legal_moves = game.get_smart_moves(limit=40) if depth > 2 else game.get_smart_moves(limit=30)
         
         if not legal_moves:
             return game.evaluate_position(self.player)
@@ -300,6 +310,110 @@ class AIPlayer:
     def get_real_time_stats(self) -> dict:
         """Get real-time thinking statistics for UI display"""
         return self.real_time_stats.copy()
+    
+    def _find_critical_blocks(self, game: GomokuGame, legal_moves: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """
+        Find moves that block immediate opponent threats.
+        Prioritizes blocking 4-in-a-row and open 3-in-a-row (both ends open).
+        Returns list of critical blocking moves that should be checked first.
+        """
+        blocking_fours = []      # HIGHEST PRIORITY: Block 4-in-a-row
+        blocking_open_threes = []  # HIGH PRIORITY: Block open 3-in-a-row
+        blocking_regular_threes = []  # MEDIUM PRIORITY: Block regular 3s
+        
+        directions = [(0, 1), (1, 0), (1, 1), (1, -1)]  # horizontal, vertical, diagonals
+        
+        # Check each legal move to see what opponent threats it blocks
+        for move in legal_moves:
+            row, col = move
+            blocks_four = False
+            blocks_open_three = False
+            blocks_three = False
+            
+            # Check all directions from this position
+            for dr, dc in directions:
+                # Count opponent stones in this direction if we DON'T play here
+                opponent_count = 0
+                open_ends = 0
+                
+                # Check positive direction
+                r, c = row + dr, col + dc
+                consecutive = 0
+                while (0 <= r < game.BOARD_SIZE and 0 <= c < game.BOARD_SIZE and consecutive < 5):
+                    if game.board[r][c] == self.opponent:
+                        consecutive += 1
+                        opponent_count += 1
+                    elif game.board[r][c] == Player.EMPTY:
+                        open_ends += 1
+                        break
+                    else:
+                        break
+                    r += dr
+                    c += dc
+                
+                # Check negative direction
+                r, c = row - dr, col - dc
+                consecutive = 0
+                while (0 <= r < game.BOARD_SIZE and 0 <= c < game.BOARD_SIZE and consecutive < 5):
+                    if game.board[r][c] == self.opponent:
+                        consecutive += 1
+                        opponent_count += 1
+                    elif game.board[r][c] == Player.EMPTY:
+                        open_ends += 1
+                        break
+                    else:
+                        break
+                    r -= dr
+                    c -= dc
+                
+                # Classify the threat
+                if opponent_count >= 4:
+                    # CRITICAL: Opponent has 4-in-a-row, MUST BLOCK!
+                    blocks_four = True
+                    break  # This is critical, no need to check other directions
+                elif opponent_count == 3 and open_ends == 2:
+                    # DANGEROUS: Opponent has open three (both ends open)
+                    # This will become open four next turn!
+                    blocks_open_three = True
+                elif opponent_count == 3 and open_ends >= 1:
+                    # MODERATE: Opponent has three with at least one end open
+                    blocks_three = True
+            
+            # Categorize the blocking move by priority
+            if blocks_four:
+                blocking_fours.append(move)
+            elif blocks_open_three:
+                blocking_open_threes.append(move)
+            elif blocks_three:
+                blocking_regular_threes.append(move)
+        
+        # Return in priority order: 4s first, then open 3s, then regular 3s
+        critical_moves = blocking_fours + blocking_open_threes + blocking_regular_threes
+        
+        if blocking_fours:
+            print(f"🚨 CRITICAL: Found {len(blocking_fours)} moves blocking 4-in-a-row!")
+        if blocking_open_threes:
+            print(f"⚠️  HIGH PRIORITY: Found {len(blocking_open_threes)} moves blocking open 3-in-a-row!")
+        
+        # SECONDARY CHECK: Also check if opponent could win by playing at any position
+        winning_threats = []
+        for move in legal_moves:
+            if move in critical_moves:
+                continue  # Already identified
+            
+            row, col = move
+            # Simulate opponent playing there
+            game_copy = game.copy()
+            game_copy.current_player = self.opponent
+            game_copy.make_move(row, col)
+            
+            # If opponent would win immediately, this MUST be blocked
+            if game_copy.game_state != GameState.PLAYING:
+                winning_threats.append(move)
+                print(f"🚨 WINNING THREAT: Opponent could win at ({row}, {col})!")
+        
+        # Winning threats have absolute highest priority
+        return winning_threats + critical_moves
 
 
 class RandomAI:

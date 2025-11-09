@@ -38,6 +38,8 @@ class UIState(Enum):
     PAUSE_MENU = "pause_menu"
     SETTINGS = "settings"
     ABOUT = "about"
+    CONNECTION_LOST = "connection_lost"
+    OPPONENT_DISCONNECTED = "opponent_disconnected"
 
 
 class GameMode(Enum):
@@ -251,6 +253,14 @@ class GomokuUI:
         self.room_id = None
         self.reconnect_info = None
         
+        # Disconnection tracking
+        self.opponent_disconnect_time = None
+        self.opponent_disconnect_timeout = 120  # seconds (not used with graceful termination)
+        self.reconnection_attempt = 0
+        self.max_reconnection_attempts = 12
+        self.disconnect_reason = ""
+        self.is_disconnect_win = False  # Track if game ended due to opponent disconnect
+        
         # Text input state
         self.text_input_active = False
         self.text_input_content = ""
@@ -348,16 +358,26 @@ class GomokuUI:
     def _play_background_music(self):
         """Start playing background music if music is enabled"""
         if not self.music_enabled:
+            print("🔇 Background music disabled by user")
             return
-        if self.background_music and os.path.exists(self.background_music):
-            try:
-                # Only start music if it's not already playing
-                if not pygame.mixer.music.get_busy():
-                    pygame.mixer.music.load(self.background_music)
-                    pygame.mixer.music.play(-1)  # Loop indefinitely
-                    pygame.mixer.music.set_volume(0.3)  # Lower volume for background
-            except Exception as e:
-                print(f"⚠️ Error playing background music: {e}")
+        if not self.background_music:
+            print("⚠️ No background music file set")
+            return
+        if not os.path.exists(self.background_music):
+            print(f"⚠️ Background music file not found: {self.background_music}")
+            return
+            
+        try:
+            # Only start music if it's not already playing
+            if not pygame.mixer.music.get_busy():
+                pygame.mixer.music.load(self.background_music)
+                pygame.mixer.music.play(-1)  # Loop indefinitely
+                pygame.mixer.music.set_volume(0.3)  # Lower volume for background
+                print(f"🎵 Background music started: {os.path.basename(self.background_music)}")
+            else:
+                print("🎵 Background music already playing")
+        except Exception as e:
+            print(f"⚠️ Error playing background music: {e}")
     
     def _stop_background_music(self):
         """Stop background music"""
@@ -425,6 +445,28 @@ class GomokuUI:
                     self.screen.blit(edge_surf, (i, 0))
                     # Right edge
                     self.screen.blit(edge_surf, (self.WINDOW_WIDTH - 1 - i, 0))
+    
+    def _wrap_text(self, text: str, font: pygame.font.Font, max_width: int) -> list:
+        """Wrap text to fit within max_width"""
+        words = text.split(' ')
+        lines = []
+        current_line = ""
+        
+        for word in words:
+            test_line = current_line + word + " "
+            test_surface = font.render(test_line, True, (0, 0, 0))
+            
+            if test_surface.get_width() <= max_width:
+                current_line = test_line
+            else:
+                if current_line:
+                    lines.append(current_line.strip())
+                current_line = word + " "
+        
+        if current_line:
+            lines.append(current_line.strip())
+        
+        return lines
     
     def _init_ui_elements(self):
         """Initialize UI elements for different states"""
@@ -581,6 +623,8 @@ class GomokuUI:
                 self._handle_room_waiting_events(event)
             elif self.ui_state == UIState.ABOUT:
                 self._handle_about_events(event)
+            elif self.ui_state == UIState.OPPONENT_DISCONNECTED:
+                self._handle_opponent_disconnected_events(event)
     
     def _handle_main_menu_events(self, event):
         """Handle main menu events"""
@@ -744,7 +788,9 @@ class GomokuUI:
                             "remaining_turn": remaining_turn
                         })
                 elif i == 1:  # Save Game
-                    self._save_game()
+                    # Only allow save in Local PvP mode
+                    if self.game_mode == GameMode.LOCAL_PVP:
+                        self._save_game()
                 elif i == 2:  # Main Menu
                     self._return_to_main_menu()
 
@@ -753,6 +799,34 @@ class GomokuUI:
         """Handle game over events"""
         buttons = self.buttons["game_over"]
         
+        # For disconnect wins, only handle main menu button
+        if self.is_disconnect_win:
+            # Only the last button (Main Menu) is available
+            if len(buttons) > 0:
+                main_menu_button = buttons[-1]
+                main_menu_button.enabled = True
+                if main_menu_button.handle_event(event):
+                    print(f"🔍 DEBUG: Disconnect win Main Menu clicked")
+                    print(f"🔍 DEBUG: is_network_game = {self.is_network_game}")
+                    print(f"🔍 DEBUG: game_mode = {self.game_mode}")
+                    print(f"🔍 DEBUG: network_manager = {self.network_manager}")
+                    print(f"🔍 DEBUG: room_info = {getattr(self, 'room_info', None)}")
+                    
+                    # Check if we're in a network game by mode OR by network_manager presence
+                    if self.is_network_game or self.game_mode == GameMode.NETWORK_GAME:
+                        # For disconnect wins in network games:
+                        # Winner stays in room and becomes host (opponent already disconnected)
+                        # Reset game and return to waiting room as the host
+                        self.game.reset_game()
+                        self.ui_state = UIState.ROOM_WAITING
+                        self._stop_background_music()
+                        print(f"📋 Returned to waiting room as host after opponent disconnect")
+                    else:
+                        self.ui_state = UIState.MAIN_MENU
+                    self.is_disconnect_win = False  # Reset flag
+            return
+        
+        # Normal game over handling (no disconnect)
         # Ensure buttons are enabled
         for button in buttons:
             button.enabled = True
@@ -770,10 +844,12 @@ class GomokuUI:
                     return  # Exit after handling
                 elif i == 1:  # Main Menu
                     if self.is_network_game:
-                        # Leave the room (other player will be notified and moved to waiting screen)
+                        # In network games, leaving from game over means:
+                        # - Player who clicks leaves the room
+                        # - Other player becomes host and goes back to waiting room
                         if self.network_manager:
                             self.network_manager.leave_room()
-                        # Disconnect from network and return to main menu
+                        # Then disconnect and return to main menu
                         self._return_to_main_menu()
                     else:
                         self.ui_state = UIState.MAIN_MENU
@@ -898,6 +974,22 @@ class GomokuUI:
                 if i == 0:  # Leave Room
                     self._leave_room()
     
+    def _handle_opponent_disconnected_events(self, event):
+        """Handle opponent disconnected screen events"""
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # Check if "Leave Game" button was clicked
+            button_width = 200
+            button_height = 50
+            button_x = (self.WINDOW_WIDTH - button_width) // 2
+            button_y = 520
+            button_rect = pygame.Rect(button_x, button_y, button_width, button_height)
+            
+            if button_rect.collidepoint(event.pos):
+                # Leave the game and return to main menu
+                self._leave_room()
+                self.opponent_disconnect_time = None
+                self.ui_state = UIState.MAIN_MENU
+    
     def _handle_escape_key(self):
         """Handle ESC key press for navigation"""
         if self.ui_state == UIState.GAME_MODE_SELECT:
@@ -926,6 +1018,10 @@ class GomokuUI:
         elif self.ui_state == UIState.SETTINGS:
             self.ui_state = UIState.MAIN_MENU
         elif self.ui_state == UIState.ABOUT:
+            self.ui_state = UIState.MAIN_MENU
+        elif self.ui_state == UIState.OPPONENT_DISCONNECTED:
+            # Allow leaving game when opponent is disconnected
+            self._leave_room()
             self.ui_state = UIState.MAIN_MENU
     
     def _cleanup_and_quit(self):
@@ -1103,6 +1199,10 @@ class GomokuUI:
             self._draw_room_create()
         elif self.ui_state == UIState.ROOM_WAITING:
             self._draw_room_waiting()
+        elif self.ui_state == UIState.CONNECTION_LOST:
+            self._draw_connection_lost()
+        elif self.ui_state == UIState.OPPONENT_DISCONNECTED:
+            self._draw_opponent_disconnected()
             
         if self.ui_state in [UIState.GAMEPLAY, UIState.PAUSE_MENU] and (
             self.turn_start_time or self.elapsed_before_pause
@@ -1334,9 +1434,13 @@ class GomokuUI:
         title_rect = title.get_rect(center=(self.WINDOW_WIDTH // 2, 150))
         self.screen.blit(title, title_rect)
         
-        for button in self.buttons["pause_menu"]:
-            button.draw(self.screen)
-        for button in self.buttons["pause_menu"]:
+        # Draw buttons based on game mode
+        # Hide "Save Game" button for AI and Network games (only allow for Local PvP)
+        for i, button in enumerate(self.buttons["pause_menu"]):
+            # Skip "Save Game" button (index 1) for AI and Network games
+            if i == 1 and (self.game_mode == GameMode.AI_GAME or self.game_mode == GameMode.NETWORK_GAME):
+                continue  # Don't draw Save Game button
+            
             # Disable Resume if not allowed
             if button.text == "Resume":
                 if self.is_network_game and self.pause_initiator and self.pause_initiator != self.my_player:
@@ -1377,10 +1481,30 @@ class GomokuUI:
         title_rect = title.get_rect(center=(self.WINDOW_WIDTH // 2, 200))
         self.screen.blit(title, title_rect)
         
-        # Draw buttons (ensure they're enabled and visible)
-        for button in self.buttons["game_over"]:
-            button.enabled = True
-            button.draw(self.screen)
+        # Show disconnect message if applicable
+        if self.is_disconnect_win and self.disconnect_reason:
+            disconnect_msg = self.font_medium.render(self.disconnect_reason, True, Colors.YELLOW)
+            disconnect_rect = disconnect_msg.get_rect(center=(self.WINDOW_WIDTH // 2, 250))
+            self.screen.blit(disconnect_msg, disconnect_rect)
+            
+            # Additional note
+            note = self.font_small.render("Opponent has left the game", True, Colors.LIGHT_GRAY)
+            note_rect = note.get_rect(center=(self.WINDOW_WIDTH // 2, 290))
+            self.screen.blit(note, note_rect)
+        
+        # Draw buttons ONLY if not a disconnect win (graceful termination)
+        # When opponent disconnects, don't show rematch/new game buttons
+        if not self.is_disconnect_win:
+            for button in self.buttons["game_over"]:
+                button.enabled = True
+                button.draw(self.screen)
+        else:
+            # Only show "Main Menu" button for disconnect wins
+            # Find and draw only the main menu button (usually the last button)
+            if len(self.buttons["game_over"]) > 0:
+                main_menu_button = self.buttons["game_over"][-1]  # Last button is usually Main Menu
+                main_menu_button.enabled = True
+                main_menu_button.draw(self.screen)
     
     def _draw_settings(self):
         """Draw settings menu with enhanced visibility"""
@@ -1757,6 +1881,143 @@ class GomokuUI:
         # Buttons
         for button in self.buttons["room_waiting"]:
             button.draw(self.screen)
+    
+    def _draw_connection_lost(self):
+        """Draw connection lost screen with reconnection progress"""
+        # Dim the background
+        overlay = pygame.Surface((self.WINDOW_WIDTH, self.WINDOW_HEIGHT))
+        overlay.set_alpha(200)
+        overlay.fill((0, 0, 0))
+        self.screen.blit(overlay, (0, 0))
+        
+        # Title
+        title = self.font_large.render("Connection Lost", True, Colors.RED)
+        title_rect = title.get_rect(center=(self.WINDOW_WIDTH // 2, 200))
+        self.screen.blit(title, title_rect)
+        
+        # Reason
+        if self.disconnect_reason:
+            try:
+                reason_lines = self._wrap_text(self.disconnect_reason, self.font_medium, self.WINDOW_WIDTH - 200)
+                y_offset = 280
+                for line in reason_lines:
+                    reason_surface = self.font_medium.render(line, True, Colors.WHITE)
+                    reason_rect = reason_surface.get_rect(center=(self.WINDOW_WIDTH // 2, y_offset))
+                    self.screen.blit(reason_surface, reason_rect)
+                    y_offset += 40
+            except Exception as e:
+                # Fallback if text wrapping fails
+                reason_surface = self.font_medium.render("Connection to server lost", True, Colors.WHITE)
+                reason_rect = reason_surface.get_rect(center=(self.WINDOW_WIDTH // 2, 280))
+                self.screen.blit(reason_surface, reason_rect)
+        
+        # Reconnection progress
+        if self.reconnection_attempt > 0:
+            progress_text = f"Reconnecting... Attempt {self.reconnection_attempt}/{self.max_reconnection_attempts}"
+            progress_surface = self.font_medium.render(progress_text, True, Colors.YELLOW)
+            progress_rect = progress_surface.get_rect(center=(self.WINDOW_WIDTH // 2, 400))
+            self.screen.blit(progress_surface, progress_rect)
+            
+            # Progress bar
+            bar_width = 400
+            bar_height = 20
+            bar_x = (self.WINDOW_WIDTH - bar_width) // 2
+            bar_y = 450
+            
+            # Background bar
+            pygame.draw.rect(self.screen, Colors.DARK_GRAY, 
+                           (bar_x, bar_y, bar_width, bar_height), border_radius=10)
+            
+            # Progress fill
+            progress = self.reconnection_attempt / self.max_reconnection_attempts
+            fill_width = int(bar_width * progress)
+            pygame.draw.rect(self.screen, Colors.YELLOW,
+                           (bar_x, bar_y, fill_width, bar_height), border_radius=10)
+        
+        # Instructions
+        instruction = self.font_small.render("Please wait while we reconnect you...", True, Colors.LIGHT_GRAY)
+        instruction_rect = instruction.get_rect(center=(self.WINDOW_WIDTH // 2, 520))
+        self.screen.blit(instruction, instruction_rect)
+    
+    def _draw_opponent_disconnected(self):
+        """Draw opponent disconnected screen with countdown"""
+        # Draw the game board in the background (dimmed)
+        try:
+            self._draw_gameplay()
+        except:
+            # If gameplay drawing fails, just use black background
+            self.screen.fill(Colors.BLACK)
+        
+        # Dim overlay
+        overlay = pygame.Surface((self.WINDOW_WIDTH, self.WINDOW_HEIGHT))
+        overlay.set_alpha(180)
+        overlay.fill((0, 0, 0))
+        self.screen.blit(overlay, (0, 0))
+        
+        # Title
+        title = self.font_large.render("Opponent Disconnected", True, Colors.WARNING)
+        title_rect = title.get_rect(center=(self.WINDOW_WIDTH // 2, 200))
+        self.screen.blit(title, title_rect)
+        
+        # Message
+        if self.disconnect_reason:
+            try:
+                message_lines = self._wrap_text(self.disconnect_reason, self.font_medium, self.WINDOW_WIDTH - 200)
+                y_offset = 280
+                for line in message_lines:
+                    message_surface = self.font_medium.render(line, True, Colors.WHITE)
+                    message_rect = message_surface.get_rect(center=(self.WINDOW_WIDTH // 2, y_offset))
+                    self.screen.blit(message_surface, message_rect)
+                    y_offset += 40
+            except Exception as e:
+                # Fallback message
+                message_surface = self.font_medium.render("Your opponent has disconnected", True, Colors.WHITE)
+                message_rect = message_surface.get_rect(center=(self.WINDOW_WIDTH // 2, 280))
+                self.screen.blit(message_surface, message_rect)
+        
+        # Countdown timer
+        if self.opponent_disconnect_time:
+            elapsed = time.time() - self.opponent_disconnect_time
+            remaining = max(0, self.opponent_disconnect_timeout - elapsed)
+            
+            countdown_text = f"Waiting for reconnection: {int(remaining)} seconds"
+            countdown_surface = self.font_medium.render(countdown_text, True, Colors.YELLOW)
+            countdown_rect = countdown_surface.get_rect(center=(self.WINDOW_WIDTH // 2, 400))
+            self.screen.blit(countdown_surface, countdown_rect)
+            
+            # Progress bar showing time remaining
+            bar_width = 400
+            bar_height = 20
+            bar_x = (self.WINDOW_WIDTH - bar_width) // 2
+            bar_y = 450
+            
+            # Background bar
+            pygame.draw.rect(self.screen, Colors.DARK_GRAY,
+                           (bar_x, bar_y, bar_width, bar_height), border_radius=10)
+            
+            # Time remaining fill
+            progress = remaining / self.opponent_disconnect_timeout
+            fill_width = int(bar_width * progress)
+            color = Colors.GREEN if progress > 0.5 else (Colors.WARNING if progress > 0.25 else Colors.RED)
+            pygame.draw.rect(self.screen, color,
+                           (bar_x, bar_y, fill_width, bar_height), border_radius=10)
+        
+        # Leave game button
+        button_width = 200
+        button_height = 50
+        button_x = (self.WINDOW_WIDTH - button_width) // 2
+        button_y = 520
+        
+        button_rect = pygame.Rect(button_x, button_y, button_width, button_height)
+        mouse_pos = pygame.mouse.get_pos()
+        is_hover = button_rect.collidepoint(mouse_pos)
+        
+        button_color = Colors.RED if is_hover else Colors.DARK_GRAY
+        pygame.draw.rect(self.screen, button_color, button_rect, border_radius=10)
+        
+        leave_text = self.font_medium.render("Leave Game", True, Colors.WHITE)
+        leave_rect = leave_text.get_rect(center=button_rect.center)
+        self.screen.blit(leave_text, leave_rect)
     
     def _draw_board(self):
         """Draw the game board with modern effects"""
@@ -2197,6 +2458,7 @@ class GomokuUI:
             return False
         
         if self.is_network_game and self.game.current_player != self.my_player:
+            print(f"🚫 Cannot make move: current_player={self.game.current_player.name}, my_player={self.my_player.name if self.my_player else 'None'}")
             return False
         
         if self.game_mode == GameMode.AI_GAME and self.game.current_player != Player.BLACK:
@@ -2231,15 +2493,29 @@ class GomokuUI:
                 if not success:
                     print("Failed to send move over network")
     
-    def _handle_network_move(self, row: int, col: int):
+    def _handle_network_move(self, row: int, col: int, timer_state: Dict[str, Any] = None):
         """Handle a move received from the network"""
         try:
             if self.game.is_valid_move(row, col):
                 if self.game.make_move(row, col):
                     self.last_move_pos = (row, col)
-                    # Reset turn timer after valid move
-                    self.turn_start_time = time.time()
-                    self.elapsed_before_pause = 0
+                    
+                    # Sync timer with server's timer state (if provided)
+                    if timer_state:
+                        server_turn_start = timer_state.get("turn_start_time")
+                        self.move_time_limit = timer_state.get("move_time_limit", 30)
+                        if server_turn_start:
+                            # Calculate time since server set the timer
+                            time_since_server_reset = time.time() - server_turn_start
+                            self.turn_start_time = time.time()
+                            self.elapsed_before_pause = time_since_server_reset
+                        else:
+                            self.turn_start_time = time.time()
+                            self.elapsed_before_pause = 0
+                    else:
+                        # Fallback: reset timer locally (old behavior)
+                        self.turn_start_time = time.time()
+                        self.elapsed_before_pause = 0
                     
                     # Play turn sound
                     self._play_sound("play_turn")
@@ -2435,9 +2711,19 @@ class GomokuUI:
                 self._refresh_room_list()
             
             def handle_disconnect():
+                """Handle disconnection from server"""
                 print("Disconnected from lobby")
+                
+                # Handle different states appropriately
                 if self.ui_state in [UIState.LOBBY_BROWSER, UIState.ROOM_CREATE, UIState.ROOM_WAITING]:
                     self.ui_state = UIState.MAIN_MENU
+                elif self.ui_state in [UIState.GAMEPLAY, UIState.PAUSE_MENU]:
+                    # If in gameplay, this means the connection was lost
+                    # The opponent disconnect handler should have been triggered
+                    # If not, show a generic disconnect message
+                    if self.ui_state != UIState.OPPONENT_DISCONNECTED and self.ui_state != UIState.CONNECTION_LOST:
+                        self.disconnect_reason = "Connection to server lost"
+                        self.ui_state = UIState.MAIN_MENU
             
             def handle_room_list(data):
                 self.current_room_list = data.get("rooms", [])
@@ -2448,7 +2734,20 @@ class GomokuUI:
                     self.room_info = data.get("room_info")
                     if self.room_info:
                         self.room_id = self.room_info.get("room_id")
+                        message = data.get("message", "")
                         print(f"Joined/Created room: {self.room_info}")
+                        print(f"Room info message: {message}")
+                        
+                        # Check if we became host (e.g., after opponent left)
+                        if "You are now the host!" in message or "You are the host" in message:
+                            print(f"👑 You became/are the host of the room!")
+                            # If we're in gameplay or game over, this means opponent left
+                            # We should go back to waiting room
+                            if self.ui_state in [UIState.GAMEPLAY, UIState.GAME_OVER, UIState.PAUSE_MENU]:
+                                self.game.reset_game()
+                                self.ui_state = UIState.ROOM_WAITING
+                                self._stop_background_music()
+                                print(f"📋 Opponent left during game - returned to waiting room as host")
 
                         # Store reconnect info
                         self.reconnect_info = {
@@ -2457,7 +2756,9 @@ class GomokuUI:
                         }
                         print(f"Reconnection info stored: {self.reconnect_info}")
 
-                        self.ui_state = UIState.ROOM_WAITING
+                        # Only set to ROOM_WAITING if we're not already in a game state
+                        if self.ui_state not in [UIState.GAMEPLAY, UIState.PAUSE_MENU, UIState.GAME_OVER]:
+                            self.ui_state = UIState.ROOM_WAITING
                     
             def handle_player_pause(data):
                 sender = data.get("player", "Unknown")
@@ -2525,7 +2826,22 @@ class GomokuUI:
             def handle_game_move(data):
                 print(f"Received move from {data.get('player', 'Unknown')}: ({data.get('row')}, {data.get('col')})")
                 if 'row' in data and 'col' in data:
-                    self._handle_network_move(data['row'], data['col'])
+                    timer_state = data.get('timer_state')
+                    self._handle_network_move(data['row'], data['col'], timer_state)
+            
+            def handle_timer_sync(data):
+                """Handle timer synchronization from server"""
+                timer_state = data.get('timer_state')
+                if timer_state:
+                    server_turn_start = timer_state.get("turn_start_time")
+                    self.move_time_limit = timer_state.get("move_time_limit", 30)
+                    if server_turn_start:
+                        time_since_server_reset = time.time() - server_turn_start
+                        self.turn_start_time = time.time()
+                        self.elapsed_before_pause = time_since_server_reset
+                    else:
+                        self.turn_start_time = time.time()
+                        self.elapsed_before_pause = 0
             
             def handle_new_game_request(data):
                 print(f"Opponent requested a new game")
@@ -2585,11 +2901,18 @@ class GomokuUI:
                 board = data.get("board", [])
                 moves = data.get("moves", [])
                 current_player = data.get("current_player", 1)
-                players = data.get("players", [])
+                players = data.get("players", {})
                 game_state_str = data.get("game_state", "playing")
+                your_role = data.get("your_role", "black")
+                your_name = data.get("your_name", "You")
+                timer_state = data.get("timer_state", {})
 
                 try:
-                    # --- 🧠 Rebuild game board completely ---
+                    # --- � Clear old game state completely ---
+                    self.game.board = [[Player.EMPTY for _ in range(15)] for _ in range(15)]
+                    self.game.move_history.clear()
+                    
+                    # --- �🧠 Rebuild game board from server state ---
                     if board and isinstance(board[0], list):
                         for r in range(len(board)):
                             for c in range(len(board[r])):
@@ -2598,13 +2921,12 @@ class GomokuUI:
 
                     # --- 🧩 Rebuild move history ---
                     from gomoku_game import Move
-                    self.game.move_history.clear()
                     for mv in moves:
                         if isinstance(mv, dict):
                             row, col = mv.get("row"), mv.get("col")
                             player_name = mv.get("player")
                             # Determine player ID by name lookup
-                            if players and player_name == players[0]:
+                            if players and player_name == players.get("black"):
                                 player = Player.BLACK
                             else:
                                 player = Player.WHITE
@@ -2619,7 +2941,49 @@ class GomokuUI:
 
                     # --- 🎮 Restore game state ---
                     self.game.current_player = Player(current_player)
-                    self.game.game_state = GameState(game_state_str)
+                    print(f"🔧 CLIENT: Restored current_player={self.game.current_player.name} (value={current_player})")
+                    self.game.game_state = GameState(game_state_str) if isinstance(game_state_str, str) else game_state_str
+                    
+                    # CRITICAL: Sync timer with server's timer state
+                    if timer_state:
+                        server_turn_start = timer_state.get("turn_start_time")
+                        self.move_time_limit = timer_state.get("move_time_limit", 30)
+                        self.elapsed_before_pause = timer_state.get("elapsed_before_pause", 0)
+                        
+                        if server_turn_start:
+                            # Calculate time since server set the timer
+                            time_since_server_reset = time.time() - server_turn_start
+                            self.turn_start_time = time.time()  # Start our timer now
+                            self.elapsed_before_pause = time_since_server_reset  # Account for network delay
+                            print(f"🔧 DEBUG: Synced timer from server - started {time_since_server_reset:.2f}s ago, effective remaining: {self.move_time_limit - time_since_server_reset:.1f}s")
+                        else:
+                            self.turn_start_time = time.time()
+                            print(f"🔧 DEBUG: Server sent no turn_start_time, starting fresh")
+                    else:
+                        # Fallback: fresh timer
+                        self.elapsed_before_pause = 0
+                        self.turn_start_time = time.time()
+                        self.move_time_limit = 30
+                        print(f"🔧 DEBUG: No timer_state from server, using fresh 30s timer")
+                    
+                    # Restore player role
+                    self.my_player = Player.BLACK if your_role == "black" else Player.WHITE
+                    print(f"🔧 DEBUG: my_player set to {self.my_player.name} (role: {your_role})")
+                    
+                    # Restore player name (for UI display)
+                    self.player_name = your_name
+                    
+                    # Restore player names from server data
+                    if players:
+                        self.player_names = {
+                            Player.BLACK: players.get("black", "Player 1"),
+                            Player.WHITE: players.get("white", "Player 2")
+                        }
+                        print(f"🔧 DEBUG: Restored player names: {self.player_names}")
+                        print(f"🔧 DEBUG: You are {self.player_name} ({your_role})")
+                    
+                    # **CRITICAL**: Mark as network game to enable turn validation
+                    self.is_network_game = True
                     
                     # Restore winner if game is over
                     if self.game.game_state in [GameState.BLACK_WINS, GameState.WHITE_WINS]:
@@ -2629,11 +2993,11 @@ class GomokuUI:
                     if self.game.game_state == GameState.PLAYING:
                         self.ui_state = UIState.GAMEPLAY
                         self.paused = False
-                        self.turn_start_time = time.time()
-                        self.elapsed_before_pause = 0
+                        # Timer already reset above - don't need to check again
                         # Restart background music if it was playing
                         if not pygame.mixer.music.get_busy():
                             self._play_background_music()
+                        print(f"🔧 DEBUG: UI state set to GAMEPLAY, game unpaused, timer running")
                     else:
                         # Game is over, show game over screen
                         self.ui_state = UIState.GAME_OVER
@@ -2660,6 +3024,7 @@ class GomokuUI:
             self.network_manager.set_message_handler("room_info", handle_room_info)
             self.network_manager.set_message_handler("game_started", handle_game_start)
             self.network_manager.set_message_handler("game_move", handle_game_move)
+            self.network_manager.set_message_handler("timer_sync", handle_timer_sync)
             self.network_manager.set_message_handler("new_game_request", handle_new_game_request)
             self.network_manager.set_message_handler("new_game_response", handle_new_game_response)
             self.network_manager.set_message_handler("player_pause", handle_player_pause)
@@ -2667,6 +3032,120 @@ class GomokuUI:
             self.network_manager.set_message_handler("player_resign", handle_player_resign)
             self.network_manager.set_message_handler("resign_ack", handle_resign_ack)
             self.network_manager.set_message_handler("reconnect_success", handle_reconnect_success)
+            
+            def handle_reconnect_failed(data):
+                """Handle failed reconnection"""
+                reason = data.get("reason", "unknown")
+                message = data.get("message", "Failed to reconnect to your game")
+                print(f"❌ Reconnection failed: {message}")
+                
+                self.disconnect_reason = message
+                self.ui_state = UIState.MAIN_MENU
+                
+            def handle_player_disconnected(data):
+                """Handle opponent disconnection"""
+                player_name = data.get("player_name", "Opponent")
+                disconnect_time = data.get("disconnect_time", time.time())
+                timeout_seconds = data.get("timeout_seconds", 120)
+                message = data.get("message", f"{player_name} has disconnected")
+                
+                print(f"⚠️ {message}")
+                print(f"Waiting {timeout_seconds} seconds for reconnection...")
+                
+                self.opponent_disconnect_time = disconnect_time
+                self.opponent_disconnect_timeout = timeout_seconds
+                self.disconnect_reason = message
+                self.ui_state = UIState.OPPONENT_DISCONNECTED
+                
+                # Pause the game and freeze timer
+                self.paused = True
+                # Freeze the timer by saving elapsed time and clearing turn_start_time
+                if self.turn_start_time:
+                    elapsed = time.time() - self.turn_start_time
+                    self.elapsed_before_pause += elapsed
+                    self.turn_start_time = None
+                
+            def handle_player_reconnected(data):
+                """Handle opponent reconnection"""
+                player_name = data.get("player", "Opponent")
+                player_role = data.get("player_role", "")
+                current_player = data.get("current_player")
+                board = data.get("board")
+                moves = data.get("moves")
+                timer_state = data.get("timer_state", {})
+                
+                print(f"✅ {player_name} has reconnected!")
+                print(f"🔧 DEBUG: Syncing timer from server - was paused={self.paused}, ui_state={self.ui_state}")
+                
+                # Sync game state if provided by server
+                if current_player is not None:
+                    self.game.current_player = Player(current_player)
+                    print(f"🔧 CLIENT: Synchronized current_player to {self.game.current_player.name} (value={current_player})")
+                
+                if board and moves is not None:
+                    # Rebuild board state from server
+                    for r in range(min(len(board), 15)):
+                        for c in range(min(len(board[r]), 15)):
+                            cell = board[r][c]
+                            self.game.board[r][c] = Player(cell) if cell in [0, 1, 2] else Player.EMPTY
+                    print(f"🔧 DEBUG: Synchronized board - {sum(cell != 0 for row in board for cell in row)} stones")
+                
+                # Resume the game
+                self.opponent_disconnect_time = None
+                
+                if self.ui_state == UIState.OPPONENT_DISCONNECTED:
+                    self.ui_state = UIState.GAMEPLAY
+                    print(f"🔧 DEBUG: UI state changed to GAMEPLAY")
+                    
+                # CRITICAL: Use server's timer state for synchronization
+                if timer_state:
+                    server_turn_start = timer_state.get("turn_start_time")
+                    self.elapsed_before_pause = timer_state.get("elapsed_before_pause", 0)
+                    self.move_time_limit = timer_state.get("move_time_limit", 30)
+                    # Calculate time since server set the timer
+                    if server_turn_start:
+                        # Adjust for network delay - server set timer at server_turn_start, we received it now
+                        time_since_server_reset = time.time() - server_turn_start
+                        self.turn_start_time = time.time()  # Start our timer now
+                        self.elapsed_before_pause = time_since_server_reset  # Account for delay
+                        print(f"🔧 DEBUG: Synced timer from server - started {time_since_server_reset:.2f}s ago, effective remaining: {self.move_time_limit - time_since_server_reset:.1f}s")
+                    else:
+                        self.turn_start_time = time.time()
+                        print(f"🔧 DEBUG: Server sent no turn_start_time, starting fresh timer")
+                else:
+                    # Fallback: reset timer locally
+                    self.elapsed_before_pause = 0
+                    self.turn_start_time = time.time()
+                    print(f"🔧 DEBUG: No timer_state from server, using local reset")
+                
+                self.paused = False  # Unpause
+                print(f"🔧 DEBUG: Game unpaused, timer running")
+                        
+            def handle_game_ended_disconnect(data):
+                """Handle game ending due to disconnect (graceful termination)"""
+                reason = data.get("reason", "opponent_disconnected")
+                disconnected_player = data.get("disconnected_player", "Opponent")
+                winner = data.get("winner", self.player_name)
+                message = data.get("message", "Game ended due to disconnection")
+                no_rematch = data.get("no_rematch", False)
+                
+                print(f"🏆 {message}")
+                
+                # Set game state to win (you win by forfeit)
+                if self.my_player == Player.BLACK:
+                    self.game.game_state = GameState.BLACK_WINS
+                    self.game.winner = Player.BLACK
+                else:
+                    self.game.game_state = GameState.WHITE_WINS
+                    self.game.winner = Player.WHITE
+                
+                # Store that this was a disconnect win (no rematch allowed)
+                self.disconnect_reason = message
+                self.is_disconnect_win = no_rematch
+                self.ui_state = UIState.GAME_OVER
+                
+                # Play winner sound
+                self._play_sound("winner")
             
             def handle_player_left_room(data):
                 """Handle when opponent leaves the room"""
@@ -2682,7 +3161,34 @@ class GomokuUI:
                     self._stop_background_music()
                     print(f"📋 Moved back to waiting room (you are now the host)")
             
+            self.network_manager.set_message_handler("reconnect_failed", handle_reconnect_failed)
+            self.network_manager.set_message_handler("player_disconnected", handle_player_disconnected)
+            self.network_manager.set_message_handler("player_reconnected", handle_player_reconnected)
+            self.network_manager.set_message_handler("game_ended_disconnect", handle_game_ended_disconnect)
             self.network_manager.set_message_handler("player_left_room", handle_player_left_room)
+            
+            # Set connection callbacks
+            self.network_manager.set_connection_callback("connect", handle_connect)
+            self.network_manager.set_connection_callback("disconnect", handle_disconnect)
+            self.network_manager.set_connection_callback("connection_lost", lambda: (
+                print("🔌 Connection lost!"),
+                setattr(self, "disconnect_reason", "Connection to server lost. Attempting to reconnect..."),
+                setattr(self, "ui_state", UIState.CONNECTION_LOST)
+            ))
+            self.network_manager.set_connection_callback("reconnecting", lambda attempt, max_attempts: (
+                setattr(self, "reconnection_attempt", attempt),
+                setattr(self, "max_reconnection_attempts", max_attempts),
+                print(f"🔄 Reconnection attempt {attempt}/{max_attempts}...")
+            ))
+            self.network_manager.set_connection_callback("reconnect_success", lambda: (
+                print("✅ Successfully reconnected to server!"),
+                setattr(self, "reconnection_attempt", 0)
+            ))
+            self.network_manager.set_connection_callback("reconnect_failed", lambda: (
+                print("❌ Failed to reconnect to server"),
+                setattr(self, "disconnect_reason", "Failed to reconnect to server after multiple attempts"),
+                setattr(self, "ui_state", UIState.MAIN_MENU)
+            ))
             
             # Get server configuration
             server_config = self.server_config_manager.get_current_config()

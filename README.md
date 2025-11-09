@@ -118,10 +118,10 @@ Be the first player to get exactly **5 stones in a row** (horizontally, vertical
 #### 2. Player vs AI
 - Human player (Black) vs Computer opponent (White)
 - Choose from 4 difficulty levels:
-  - **Easy**: Depth 2, basic evaluation (~100-500 nodes/second)
-  - **Medium**: Depth 4, smart move selection (~1000-2000 nodes/second)
-  - **Hard**: Depth 6, advanced pruning (~2000-5000 nodes/second)
-  - **Expert**: Depth 8, maximum strength (~5000+ nodes/second)
+  - **Easy**: Depth 3, basic evaluation (~1K-3K nodes/move)
+  - **Medium**: Depth 5, smart move selection (~5K-20K nodes/move)
+  - **Hard**: Depth 7, advanced pruning (~20K-100K nodes/move)
+  - **Expert**: Depth 9, maximum strength (~50K-500K nodes/move)
 
 **AI Debug Viewer** (Press 'D' during gameplay):
 - Real-time display of AI thinking process
@@ -129,6 +129,155 @@ Be the first player to get exactly **5 stones in a row** (horizontally, vertical
 - Displays move evaluations with scores as AI thinks
 - Visualizes best move found so far
 - See how alpha-beta pruning works in real-time
+
+---
+
+## AI Implementation Details
+
+### Algorithm: Minimax with Alpha-Beta Pruning
+
+The AI opponent uses the **Minimax algorithm with Alpha-Beta pruning**, a classic adversarial search algorithm that assumes both players play optimally. The algorithm recursively explores the game tree to find the best move.
+
+#### Core Algorithm Components
+
+1. **Minimax Search**
+   - Explores game tree by simulating both players' moves
+   - Maximizing player (AI) tries to maximize score
+   - Minimizing player (opponent) tries to minimize score
+   - Returns the best move based on evaluation scores
+
+2. **Alpha-Beta Pruning**
+   - Optimization technique that eliminates unnecessary branches
+   - Maintains alpha (best MAX score) and beta (best MIN score)
+   - Prunes branches where beta ≤ alpha (no better move possible)
+   - **Reduces nodes evaluated by ~60-80%** in typical games
+
+3. **Iterative Deepening**
+   - Starts search at depth 1, gradually increases depth
+   - Allows time management (stops when time limit reached)
+   - Ensures AI always has a valid move (best from completed depth)
+   - Better move ordering improves pruning efficiency
+
+4. **Smart Move Selection**
+   - Generates candidate moves near existing stones (within 1 square)
+   - Reduces branching factor from ~225 to ~30-50 moves
+   - Orders moves by static evaluation for better pruning
+   - Critical for performance in deeper searches
+
+#### Difficulty Levels & Node Expansion
+
+| Difficulty | Max Depth | Time Limit | Candidates | Typical Nodes Evaluated |
+|------------|-----------|------------|------------|------------------------|
+| **Easy** | 3 | 2.0s | 25 | 1,000 - 3,000 nodes |
+| **Medium** | 5 | 5.0s | 45 | 5,000 - 20,000 nodes |
+| **Hard** | 7 | 8.0s | 55 | 20,000 - 100,000 nodes |
+| **Expert** | 9 | 15.0s | 70 | 50,000 - 500,000 nodes |
+
+**Node Expansion Capacity**:
+- **Easy**: ~25 × 30² = **~22,500 theoretical** (minimal pruning, ~2K actual)
+- **Medium**: ~45 × 40⁴ = **~115M theoretical** (heavy pruning, ~15K actual)
+- **Hard**: ~55 × 40⁶ = **~2.3T theoretical** (heavy pruning, ~60K actual)
+- **Expert**: ~70 × 40⁸ = **~460T theoretical** (heavy pruning, ~300K actual)
+
+*Note: Actual nodes evaluated are much lower due to alpha-beta pruning (60-80% reduction) and time limits.*
+
+#### Position Evaluation Heuristic
+
+The AI evaluates board positions using an **advanced pattern-based scoring system** with tactical awareness:
+
+```python
+def evaluate_position(board, player):
+    score = 0
+    
+    # Pattern Recognition for EXISTING stones:
+    for each stone on board:
+        for each direction:
+            analyze_consecutive_pattern()
+            
+            # Scoring for existing patterns:
+            # Five in a row: +50,000 (instant win)
+            # Open four: +10,000 (unstoppable threat)
+            # Four (one end): +5,000 (strong threat)
+            # Open three: +2,000 (can become open four)
+            # Three (one end): +500 (moderate threat)
+            # Open two: +100 (building position)
+            # Single stone: +2 (minimal value)
+    
+    # Potential Analysis for EMPTY positions:
+    for each empty position:
+        simulate_placing_stone()
+        
+        # Scoring for potential moves:
+        # Would make five: +100,000 (winning move!)
+        # Would make four: +50,000 (critical move)
+        # Would make open three: +5,000 (strong move)
+        # Would make three: +1,000 (good move)
+        # Would make open two: +500 (developing move)
+        # Would make two: +100 (useful move)
+    
+    # Defensive weighting: opponent threats × 1.1
+    return score(AI) - score(opponent) × 1.1
+```
+
+**Key Improvements**:
+- **Dual Evaluation**: Analyzes both existing patterns AND potential moves
+- **Open-End Detection**: Distinguishes between open and blocked formations
+- **Defensive Priority**: Weights opponent threats 1.3x-2.0x based on severity
+  - Normal positions: ×1.3
+  - Strong threats (open three): ×1.8
+  - Critical threats (open four): ×2.0
+- **Threat Recognition**: Identifies forcing moves (open fours, open threes)
+- **Strategic Depth**: Evaluates long-term positional value
+- **Critical Block Detection**: Pre-scans for opponent winning moves and prioritizes blocking them
+
+#### Performance Optimizations
+
+1. **Move Ordering**
+   - Evaluates all candidate moves at root level
+   - Sorts by score before minimax search
+   - Best moves evaluated first → more pruning
+   - **Critical Blocks Prioritized**: Detects opponent winning threats and checks blocking moves first
+
+2. **Defensive Threat Detection**
+   - Scans for opponent winning moves before search
+   - Prioritizes blocking critical threats
+   - Weighted defense: opponent threats × 1.3-2.0 depending on severity
+   - **Immediate threat response**: Open fours and winning moves blocked first
+
+3. **Enhanced Evaluation Weighting**
+   - Normal play: Opponent score × 1.3
+   - Strong threats (open three+): Opponent score × 1.8
+   - Critical threats (open four+): Opponent score × 2.0
+   - Ensures AI always blocks winning moves
+
+#### AI Statistics & Debugging
+
+Press **'D'** during AI games to view real-time statistics:
+
+- **Nodes Evaluated**: Total positions examined
+- **Search Depth**: Maximum depth reached in search tree
+- **Pruning Count**: Number of branches pruned
+- **Pruning Efficiency**: Percentage of branches eliminated
+- **Search Time**: Time taken for current move
+- **Nodes per Second**: Search speed metric
+- **Nodes by Depth**: Distribution of nodes across depths
+- **Move Evaluations**: Scores for all candidate moves
+
+**Example Output**:
+```
+AI Statistics (Expert):
+  Nodes Evaluated: 142,538
+  Search Depth: 8
+  Pruning Count: 89,241 (62.6%)
+  Search Time: 4.2s
+  Nodes/Second: 33,937
+  
+Move Evaluations:
+  (7,7) → +850
+  (7,8) → +720
+  (8,7) → +650
+  ...
+```
 
 #### 3. Network Multiplayer
 

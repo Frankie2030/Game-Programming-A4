@@ -21,10 +21,15 @@ class StableGomokuClient:
         self.connected = False
         self.running = False
         
+        # Connection info for reconnection
+        self.last_host = ""
+        self.last_port = 0
+        
         # Player info
         self.client_id = None
         self.player_name = ""
         self.current_room_id = None
+        self.session_token = None
         
         # Message handlers
         self.message_handlers = {}
@@ -33,9 +38,15 @@ class StableGomokuClient:
         # Threading
         self.receive_thread = None
         self.ping_thread = None
+        self.reconnect_thread = None
         
         # Buffer for incoming data
         self.receive_buffer = b""
+        
+        # Reconnection state
+        self.is_reconnecting = False
+        self.reconnect_attempts = 0
+        self.max_reconnect_attempts = 12  # 12 attempts * 5 seconds = 60 seconds
     
     def set_message_handler(self, message_type: str, handler: Callable):
         """Set handler for specific message type"""
@@ -52,8 +63,14 @@ class StableGomokuClient:
             self.socket.settimeout(10.0)
             self.socket.connect((host, port))
             
+            # Store connection info for reconnection
+            self.last_host = host
+            self.last_port = port
+            
             self.connected = True
             self.running = True
+            self.is_reconnecting = False
+            self.reconnect_attempts = 0
             
             # Start threads
             self.receive_thread = threading.Thread(target=self._receive_loop, daemon=True)
@@ -78,7 +95,10 @@ class StableGomokuClient:
     
     def disconnect(self):
         """Disconnect from server"""
-        self.running = False
+        # Only stop the client if not reconnecting
+        if not self.is_reconnecting:
+            self.running = False
+        
         self.connected = False
         
         if self.socket:
@@ -90,7 +110,8 @@ class StableGomokuClient:
         
         print("👋 Disconnected from server")
         
-        if "disconnect" in self.connection_callbacks:
+        # Only notify disconnect if not in reconnection process
+        if not self.is_reconnecting and "disconnect" in self.connection_callbacks:
             self.connection_callbacks["disconnect"]()
     
     def send_message(self, message_type: str, data: Dict[str, Any] = None) -> bool:
@@ -117,7 +138,10 @@ class StableGomokuClient:
     def join_lobby(self, player_name: str) -> bool:
         """Join the lobby with player name"""
         self.player_name = player_name
-        return self.send_message("lobby_join", {"player_name": player_name})
+        return self.send_message("lobby_join", {
+            "player_name": player_name,
+            "session_token": self.session_token
+        })
     
     def create_room(self, room_name: str) -> bool:
         """Create a new room"""
@@ -171,9 +195,18 @@ class StableGomokuClient:
                     print(f"⚠️  Receive error: {e}")
                 break
         
-        # Connection lost
-        if self.connected:
-            self.disconnect()
+        # Connection lost - attempt reconnection if we were in a game
+        print(f"🔧 DEBUG: Receive loop exited - connected={self.connected}, is_reconnecting={self.is_reconnecting}, current_room_id={self.current_room_id}")
+        if self.connected and not self.is_reconnecting:
+            # Only attempt reconnection if we were in a room/game
+            if self.current_room_id:
+                print("🔌 Connection lost during game - attempting to reconnect...")
+                self._attempt_reconnection()
+            else:
+                print("🔌 Connection lost (not in game)")
+                self.disconnect()
+        else:
+            print(f"🔧 DEBUG: Skipping reconnection logic - connected={self.connected}, is_reconnecting={self.is_reconnecting}")
     
     def _handle_message(self, message: Dict[str, Any]):
         """Handle received message"""
@@ -186,7 +219,9 @@ class StableGomokuClient:
                 return
             elif msg_type == "lobby_joined":
                 self.client_id = data.get("client_id")
+                self.session_token = data.get("session_token")  # Store session token
                 print(f"🎮 Joined lobby as {self.player_name} ({self.client_id})")
+                print(f"🔑 Session token: {self.session_token[:16]}...")
             elif msg_type == "room_created":
                 self.current_room_id = data.get("room_id")
                 print(f"🏠 Created room: {data.get('room_name')} ({self.current_room_id})")
@@ -196,6 +231,14 @@ class StableGomokuClient:
             elif msg_type == "room_closed":
                 self.current_room_id = None
                 print(f"🚪 Room closed: {data.get('reason', 'Unknown reason')}")
+            elif msg_type == "reconnect_success":
+                print(f"✅ Reconnection successful! Restored to room {data.get('room_name')}")
+                self.current_room_id = data.get("room_id")
+                self.is_reconnecting = False
+            elif msg_type == "reconnect_failed":
+                print(f"❌ Reconnection failed: {data.get('message', 'Unknown reason')}")
+                self.is_reconnecting = False
+                self.current_room_id = None
             
             # Call registered handler
             if msg_type in self.message_handlers:
@@ -203,6 +246,82 @@ class StableGomokuClient:
                 
         except Exception as e:
             print(f"⚠️  Message handling error: {e}")
+    
+    def _attempt_reconnection(self):
+        """Attempt to reconnect to the server"""
+        if self.is_reconnecting:
+            print("🔧 DEBUG: Already reconnecting, skipping...")
+            return
+        
+        print(f"🔧 DEBUG: Starting reconnection - running={self.running}, connected={self.connected}")
+        self.is_reconnecting = True
+        self.connected = False
+        
+        # Notify UI about connection loss
+        if "connection_lost" in self.connection_callbacks:
+            self.connection_callbacks["connection_lost"]()
+        
+        # Close old socket
+        if self.socket:
+            try:
+                self.socket.close()
+            except:
+                pass
+            self.socket = None
+        
+        # Start reconnection thread
+        self.reconnect_thread = threading.Thread(target=self._reconnect_loop, daemon=True)
+        self.reconnect_thread.start()
+    
+    def _reconnect_loop(self):
+        """Reconnection loop with retry logic"""
+        print(f"🔄 Starting reconnection attempts (max {self.max_reconnect_attempts})...")
+        print(f"🔧 DEBUG: Reconnect loop - running={self.running}, is_reconnecting={self.is_reconnecting}")
+        
+        for attempt in range(1, self.max_reconnect_attempts + 1):
+            if not self.is_reconnecting:
+                print(f"🔧 DEBUG: Reconnection cancelled (is_reconnecting={self.is_reconnecting})")
+                break
+            
+            if not self.running:
+                print(f"🔧 DEBUG: Client stopped (running={self.running}), aborting reconnection")
+                break
+            
+            print(f"🔄 Reconnection attempt {attempt}/{self.max_reconnect_attempts}...")
+            
+            # Notify UI about attempt
+            if "reconnecting" in self.connection_callbacks:
+                self.connection_callbacks["reconnecting"](attempt, self.max_reconnect_attempts)
+            
+            # Try to reconnect
+            if self.connect(self.last_host, self.last_port):
+                # Connection successful, now rejoin with session token
+                time.sleep(0.5)  # Brief delay to let connection stabilize
+                
+                if self.join_lobby(self.player_name):
+                    print(f"✅ Successfully reconnected as {self.player_name}")
+                    
+                    # Notify UI about successful reconnection
+                    if "reconnect_success" in self.connection_callbacks:
+                        self.connection_callbacks["reconnect_success"]()
+                    
+                    return
+            
+            # Wait before next attempt (unless it's the last one)
+            if attempt < self.max_reconnect_attempts:
+                time.sleep(5)
+        
+        # All attempts failed
+        print(f"❌ Failed to reconnect after {self.max_reconnect_attempts} attempts")
+        self.is_reconnecting = False
+        
+        # Notify UI about failure
+        if "reconnect_failed" in self.connection_callbacks:
+            self.connection_callbacks["reconnect_failed"]()
+        
+        # Final disconnect
+        if "disconnect" in self.connection_callbacks:
+            self.connection_callbacks["disconnect"]()
     
     def _ping_loop(self):
         """Send periodic pings"""

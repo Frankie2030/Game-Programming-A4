@@ -8,6 +8,8 @@ import threading
 import json
 import time
 import select
+import uuid
+import secrets
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from enum import Enum
@@ -35,14 +37,18 @@ class Player:
     client_id: str
     name: str
     socket: socket.socket
+    session_token: str = ""
     room_id: Optional[str] = None
     connected_time: float = 0.0
     last_ping: float = 0.0
+    disconnected_time: Optional[float] = None
     
     def __post_init__(self):
         if self.connected_time == 0.0:
             self.connected_time = time.time()
         self.last_ping = time.time()
+        if not self.session_token:
+            self.session_token = secrets.token_urlsafe(32)
 
 
 @dataclass
@@ -55,12 +61,25 @@ class GameRoom:
     max_players: int = 2
     created_time: float = 0.0
     game_state: Dict[str, Any] = None
+    game_paused: bool = False
+    pause_reason: str = ""
+    timer_state: Dict[str, Any] = None
     
     def __post_init__(self):
         if self.created_time == 0.0:
             self.created_time = time.time()
         if self.game_state is None:
-            self.game_state = {"board": [[0 for _ in range(15)] for _ in range(15)], "current_player": 1, "moves": []}
+            self.game_state = {
+                "board": [[0 for _ in range(15)] for _ in range(15)], 
+                "current_player": 1, 
+                "moves": []
+            }
+        if self.timer_state is None:
+            self.timer_state = {
+                "turn_start_time": None,
+                "elapsed_before_pause": 0,
+                "move_time_limit": 60
+            }
     
     def is_full(self) -> bool:
         return len(self.players) >= self.max_players
@@ -269,56 +288,23 @@ class DedicatedGomokuServer:
         
         elif msg_type == "lobby_join":
             player_name = data.get("player_name", f"Player_{client_id}")
+            session_token = data.get("session_token", None)
 
-            # --- 🔁 Check if player is reconnecting ---
-            old_player = None
-            for pid, p in list(self.players.items()):
-                if p.name == player_name and p.socket is None:
-                    old_player = p
-                    break
-
-            if old_player:
-                print(f"🔁 Reconnecting {player_name} to previous session in {old_player.room_id}")
-                new_socket = self.players[client_id].socket
-                old_player.socket = new_socket
-                old_player.last_ping = time.time()
-                if hasattr(old_player, "disconnected_time"):
-                    delattr(old_player, "disconnected_time")
-
-                self.client_sockets[new_socket] = old_player.client_id
-                del self.players[client_id]
-
-                room = self.rooms.get(old_player.room_id)
-                if room:
-                    game_state = room.game_state or {}
-                    self._send_to_client(old_player.client_id, {
-                        "type": "reconnect_success",
-                        "data": {
-                            "room_id": old_player.room_id,
-                            "board": game_state.get("board", [[0 for _ in range(15)] for _ in range(15)]),
-                            "current_player": game_state.get("current_player", 1),
-                            "moves": game_state.get("moves", []),
-                            "players": [
-                                self.players[p].name if p in self.players else "Unknown"
-                                for p in room.players
-                            ]
-                        }
-                    })
-                    for other_id in room.players:
-                        if other_id != old_player.client_id:
-                            self._send_to_client(other_id, {
-                                "type": "player_reconnected",
-                                "data": {"player": old_player.name}
-                            })
-                return
-
-            # Normal lobby join
+            # ===== GRACEFUL TERMINATION: No reconnection logic =====
+            # With graceful termination, disconnects immediately end the game
+            # So we don't need reconnection handling here
+            
+            # Normal lobby join (new player)
             self.players[client_id].name = player_name
             print(f"🎮 {player_name} ({client_id}) joined lobby")
 
             self._send_to_client(client_id, {
                 "type": "lobby_joined",
-                "data": {"client_id": client_id, "name": player_name}
+                "data": {
+                    "client_id": client_id, 
+                    "name": player_name,
+                    "session_token": self.players[client_id].session_token
+                }
             })
             self._send_room_list(client_id)
         
@@ -497,9 +483,19 @@ class DedicatedGomokuServer:
             return
         
         room = self.rooms[room_id]
+        msg_type = message.get("type", "unknown")
+        sent_count = 0
         for client_id in room.players:
             if client_id != exclude_client:
-                self._send_to_client(client_id, message)
+                player = self.players.get(client_id)
+                if player and player.socket:
+                    self._send_to_client(client_id, message)
+                    sent_count += 1
+                else:
+                    print(f"⚠️ Cannot broadcast {msg_type} to {player.name if player else client_id} - no socket")
+        
+        if msg_type == "game_move":
+            print(f"📡 Broadcasted {msg_type} to {sent_count}/{len(room.players)} players in room {room.name}")
     
     def _send_room_list(self, client_id: str):
         """Send current room list to client"""
@@ -607,16 +603,44 @@ class DedicatedGomokuServer:
         # Optional board sync from client
         if data.get("board"):
             room.game_state["board"] = data["board"]
+        
+        # Update server's board state with the new move
+        room.game_state["board"][row][col] = player_id
+        
+        # Debug: Count stones on board
+        stone_count = sum(cell != 0 for row_data in room.game_state["board"] for cell in row_data)
+        print(f"📍 Move at ({row}, {col}) by {player.name} (ID: {player_id}). Board now has {stone_count} stones")
 
         # Save move
         room.game_state["moves"].append({"player": player.name, "row": row, "col": col})
         room.game_state["current_player"] = 3 - room.game_state.get("current_player", 1)
 
-        # Broadcast to opponent
+        # Reset timer for the next turn
+        room.timer_state = {
+            "turn_start_time": time.time(),
+            "elapsed_before_pause": 0,
+            "move_time_limit": room.timer_state.get("move_time_limit", 30) if room.timer_state else 30
+        }
+
+        # Send timer sync to the player who made the move
+        self._send_to_client(client_id, {
+            "type": "timer_sync",
+            "data": {
+                "timer_state": room.timer_state
+            }
+        })
+
+        # Broadcast move to OTHER players (excluding sender) with synchronized timer
         self._broadcast_to_room(room_id, {
             "type": "game_move",
-            "data": {"player": player.name, "row": row, "col": col, "player_id": player_id}
-        }, exclude_client=client_id)
+            "data": {
+                "player": player.name,
+                "row": row,
+                "col": col,
+                "player_id": player_id,
+                "timer_state": room.timer_state  # Send synchronized timer
+            }
+        }, exclude_client=client_id)  # Exclude sender - they already have the move!
 
     def _handle_new_game_request(self, client_id: str, data: Dict[str, Any]):
         """Handle new game request"""
@@ -740,6 +764,7 @@ class DedicatedGomokuServer:
         self._broadcast_room_list()
     
     def _remove_client(self, client_id: str, *, force: bool = False):
+        """Remove or temporarily disconnect a client"""
         if client_id not in self.players:
             return
 
@@ -747,6 +772,7 @@ class DedicatedGomokuServer:
         if not force and getattr(player, "socket", None) is None:
             return  # Already marked as disconnected
 
+        # Close socket and mark as disconnected
         if player.socket:
             try:
                 if player.socket in self.client_sockets:
@@ -759,65 +785,96 @@ class DedicatedGomokuServer:
         player.last_ping = time.time()
         player.disconnected_time = time.time()
 
-        if player.room_id and not force:
-            print(f"⚠️ Player {player.name} temporarily disconnected from {player.room_id}")
-            return
-
+        # ===== GRACEFUL TERMINATION: Immediate forfeit on disconnect =====
+        # When a player disconnects, immediately end the game and declare the other player as winner
         room_id = player.room_id
         if room_id and room_id in self.rooms:
             room = self.rooms[room_id]
             if client_id in room.players:
                 room.players.remove(client_id)
+            
+            # Check if room is now empty
             if not room.players:
                 print(f"🗑️ Removing empty room {room.name}")
                 del self.rooms[room_id]
             else:
-                # Transfer host if needed
+                # Notify remaining players that game ended due to disconnect (immediate forfeit)
+                # Find the winner (the player who didn't disconnect)
+                winner_id = None
+                winner_name = "Unknown"
+                for pid in room.players:
+                    if pid != client_id and pid in self.players:
+                        winner_id = pid
+                        winner_name = self.players[pid].name
+                        break
+                
+                self._broadcast_to_room(room_id, {
+                    "type": "game_ended_disconnect",
+                    "data": {
+                        "reason": "opponent_disconnected",
+                        "disconnected_player": player.name,
+                        "winner": winner_name,
+                        "message": f"{player.name} has disconnected. {winner_name} wins by forfeit!",
+                        "forfeit": True,
+                        "no_rematch": True  # Don't show rematch button
+                    }
+                })
+                
+                # Always update room info after a player leaves (player count changed)
+                # Transfer host if the disconnected player was the host
                 if client_id == room.host_id:
                     new_host_id = room.players[0]
                     room.host_id = new_host_id
                     new_host_name = self.players.get(new_host_id, Player(new_host_id, "Unknown", None)).name
-                    for rid in room.players:
-                        if rid in self.players:
-                            self._send_to_client(rid, {
-                                "type": "room_info",
-                                "data": {
-                                    "success": True,
-                                    "room_info": {
-                                        "room_id": room.room_id,
-                                        "name": room.name,
-                                        "host_name": new_host_name,
-                                        "players": len(room.players),
-                                        "max_players": room.max_players
-                                    },
-                                    "message": "You are now the host!" if rid == new_host_id else f"{new_host_name} is now the host"
-                                }
-                            })
+                    host_message = "You are now the host!"
+                else:
+                    # Host didn't change, but we still need to send updated player count
+                    new_host_id = room.host_id
+                    new_host_name = self.players.get(new_host_id, Player(new_host_id, "Unknown", None)).name
+                    host_message = f"Opponent disconnected. You are the host."
+                
+                # Send updated room info to all remaining players
+                for rid in room.players:
+                    if rid in self.players:
+                        self._send_to_client(rid, {
+                            "type": "room_info",
+                            "data": {
+                                "success": True,
+                                "room_info": {
+                                    "room_id": room.room_id,
+                                    "name": room.name,
+                                    "host_name": new_host_name,
+                                    "players": len(room.players),
+                                    "max_players": room.max_players
+                                },
+                                "message": host_message if rid == new_host_id else f"{new_host_name} is the host"
+                            }
+                        })
+            
             player.room_id = None
 
+        # Remove from players dictionary
         del self.players[client_id]
-        print(f"👋 {player.name} ({client_id}) disconnected")
+        print(f"👋 {player.name} ({client_id}) permanently disconnected")
     
     def _cleanup_loop(self):
+        """Periodic cleanup of disconnected players and timed-out sessions"""
         while self.running:
             current_time = time.time()
             clients_to_remove = []
 
             for client_id, player in list(self.players.items()):
-                # Give disconnected players 120 seconds to reconnect
-                if hasattr(player, "disconnected_time"):
-                    if current_time - player.disconnected_time > 120:
-                        print(f"🧹 Removing disconnected player {player.name}")
-                        clients_to_remove.append(client_id)
-                    continue
-
-                if current_time - player.last_ping > 90:
+                # With graceful termination, we don't need reconnection window
+                # Just handle connected players with ping timeout (90 seconds)
+                if player.socket and current_time - player.last_ping > 90:
+                    print(f"⏰ Ping timeout: Disconnecting {player.name}")
                     clients_to_remove.append(client_id)
 
+            # Remove timed-out clients
             for cid in clients_to_remove:
                 self._remove_client(cid, force=True)
 
-            time.sleep(30)
+            time.sleep(30)  # Check every 30 seconds
     
     def get_stats(self) -> Dict[str, Any]:
         """Get server statistics"""
