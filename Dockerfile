@@ -27,5 +27,7 @@ EXPOSE ${PORT}
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD \
     nc -z localhost ${PORT} || exit 1
 
+ENV SDL_AUDIODRIVER=dummy
+
 # --- Start Dedicated Server ---
 CMD ["python", "main.py", "--server", "--host", "0.0.0.0", "--port", "12345"]
