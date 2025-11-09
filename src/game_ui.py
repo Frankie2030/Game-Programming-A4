@@ -752,9 +752,12 @@ class GomokuUI:
                         if self.is_network_game and self.network_manager:
                             # Share the remaining move time (not pause limit)
                             remaining_turn = max(0, self.move_time_limit - self.elapsed_before_pause)
+                            pause_timestamp = time.time()  # Record when pause was initiated
                             self.network_manager.send_message("player_pause", {
                                 "player": self.player_names[self.game.current_player],
-                                "remaining_turn": remaining_turn
+                                "remaining_turn": remaining_turn,
+                                "pauses_remaining": self.pause_allowance[self.game.current_player],  # Send updated pause count
+                                "pause_timestamp": pause_timestamp  # Send pause initiation timestamp
                             })
                 elif i == 1:  # Resign
                     self._resign_game()
@@ -791,6 +794,11 @@ class GomokuUI:
                     remaining_turn = max(0, self.move_time_limit - self.elapsed_before_pause)
                     self.turn_start_time = time.time()
 
+                    # Calculate how long we were paused (for synchronization)
+                    pause_duration_used = 0
+                    if self.pause_start_time:
+                        pause_duration_used = time.time() - self.pause_start_time
+
                     self.ui_state = UIState.GAMEPLAY
                     
                     # Play board start sound when resuming
@@ -800,7 +808,8 @@ class GomokuUI:
                     if self.is_network_game and self.network_manager:
                         self.network_manager.send_message("player_resume", {
                             "player": self.player_names[self.game.current_player],
-                            "remaining_turn": remaining_turn
+                            "remaining_turn": remaining_turn,
+                            "pause_duration_used": pause_duration_used  # Send how long we paused
                         })
                 elif i == 1:  # Save Game
                     # Only allow save in Local PvP mode
@@ -2257,11 +2266,7 @@ class GomokuUI:
                 player_color = Colors.WHITE
                 player_text = f"{symbol} {player_name}"
             
-            # Add "(YOU)" indicator for human player in AI games
-            if self.game_mode == GameMode.AI_GAME and player == Player.BLACK:
-                player_text += " (YOU)"
-            
-            # Add "(YOU)" indicator for network games
+            # Add "(YOU)" indicator ONLY for network games (not AI games)
             if self.is_network_game and hasattr(self, 'network_game_info'):
                 your_role = self.network_game_info.get('your_role', 'black')
                 if (your_role == 'black' and player == Player.BLACK) or \
@@ -2843,17 +2848,31 @@ class GomokuUI:
             def handle_player_pause(data):
                 sender = data.get("player", "Unknown")
                 remaining_turn = data.get("remaining_turn", None)
+                pauses_remaining = data.get("pauses_remaining", None)
+                pause_timestamp = data.get("pause_timestamp", None)
                 print(f"🔶 Received pause signal from {sender}")
 
                 # Freeze game on both sides
                 self.paused = True
                 self.ui_state = UIState.PAUSE_MENU
-                self.pause_start_time = time.time()
+                
+                # Synchronize pause start time with the initiator's timestamp
+                if pause_timestamp is not None:
+                    self.pause_start_time = pause_timestamp
+                    print(f"Synchronized pause start time with initiator")
+                else:
+                    self.pause_start_time = time.time()  # Fallback to local time
+                
                 # Record who paused — determine opponent
                 if self.my_player == Player.BLACK:
                     self.pause_initiator = Player.WHITE
                 else:
                     self.pause_initiator = Player.BLACK
+
+                # Synchronize pause count from the pauser
+                if pauses_remaining is not None:
+                    self.pause_allowance[self.pause_initiator] = pauses_remaining
+                    print(f"Synchronized pause count for {self.pause_initiator.name}: {pauses_remaining} remaining")
 
                 # Synchronize timer with sender
                 if remaining_turn is not None:
