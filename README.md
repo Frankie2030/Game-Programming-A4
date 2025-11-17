@@ -88,10 +88,11 @@ Prerequisites: Python 3.7+; Pygame library
   - **Medium**: Depth 5, smart move selection (~5K-20K nodes/move)
   - **Hard**: Depth 7, advanced pruning (~20K-100K nodes/move)
   - **Expert**: Depth 9, maximum strength (~50K-500K nodes/move)
+- There is also a Multi-AI mode (1 Player vs N AI) where each paper takes turn fairly.
 
-#### 2. Multi-player Mode
+#### 2. Two-player Mode
 
-The game supports online multiplayer through a dedicated server system with configurable server endpoints. It includes a server configuration system that supports multiple deployment targets:
+The game supports online multiplayer (currently supports two-player) through a dedicated server system with configurable server endpoints. It includes a server configuration system that supports multiple deployment targets:
 
 - **Local Development**: `localhost:12345` (default)
 - **Local Network**: `0.0.0.0:12345` (accessible from other devices)
