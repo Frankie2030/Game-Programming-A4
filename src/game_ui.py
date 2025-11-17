@@ -2296,10 +2296,10 @@ class GomokuUI:
         # Game mode - positioned after move count
         mode_y = move_y + 28
         mode_text = f"Mode: {self.game_mode.value.replace('_', ' ').title()}"
-        mode_shadow = self.font_info.render(mode_text, True, (0, 0, 0))
-        self.screen.blit(mode_shadow, (info_x + 1, mode_y + 1))
-        mode_surface = self.font_info.render(mode_text, True, Colors.WHITE)
-        self.screen.blit(mode_surface, (info_x, mode_y))
+        # mode_shadow = self.font_info.render(mode_text, True, (0, 0, 0))
+        # self.screen.blit(mode_shadow, (info_x + 1, mode_y + 1))
+        # mode_surface = self.font_info.render(mode_text, True, Colors.WHITE)
+        # self.screen.blit(mode_surface, (info_x, mode_y))
         
         # AI info - only show if debug panel is not enabled
         if self.game_mode == GameMode.AI_GAME and self.ai_player and not self.ai_debug_enabled:

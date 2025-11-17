@@ -1,5 +1,5 @@
 {
-  "current_config": "Local Development",
+  "current_config": "AWS EC2",
   "configs": {
     "Local Development": {
       "name": "Local Development",
